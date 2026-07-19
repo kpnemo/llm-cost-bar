@@ -24,6 +24,7 @@ public final class SyncEngine: @unchecked Sendable {
     public static func defaultProviderFactory(account: AccountRow, credential: Credential) -> VendorProvider {
         switch account.vendor {
         case "anthropic": AnthropicProvider(accountID: account.id, credential: credential)
+        case "openai": OpenAIProvider(accountID: account.id, credential: credential)
         default: OpenRouterProvider(accountID: account.id, credential: credential)
         }
     }

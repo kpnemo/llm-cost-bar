@@ -4,9 +4,15 @@ import XCTest
 final class FakeHTTP: HTTPClient, @unchecked Sendable {
     var responses: [String: (String, Int)] = [:]   // url substring → (body, status)
     func get(_ url: URL, bearer: String) async throws -> (Data, Int) {
-        for (k, v) in responses where url.absoluteString.contains(k) {
-            return (Data(v.0.utf8), v.1)
+        // Prefer the most specific (longest) matching key so a paginated URL
+        // containing both "group_by=…" and "page=tok2" matches the page stub,
+        // not the page-1 stub which is also a substring of the page-2 URL.
+        var best: (String, Int)? = nil
+        var bestLen = -1
+        for (k, v) in responses where url.absoluteString.contains(k) && k.count > bestLen {
+            best = v; bestLen = k.count
         }
+        if let best { return (Data(best.0.utf8), best.1) }
         throw ProviderError.transient("no stub for \(url)")
     }
     func post(_ url: URL, json: [String: String]) async throws -> (Data, Int) {

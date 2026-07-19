@@ -56,13 +56,23 @@ struct DropdownView: View {
         } else if let last = model.accounts.compactMap(\.lastSyncOK).max(),
                   let date = ISO8601DateFormatter().date(from: last) {
             let mins = Int(Date().timeIntervalSince(date) / 60)
-            Label(mins > 120 ? "synced \(mins / 60) h ago" : "\(mins) min ago",
-                  systemImage: "arrow.triangle.2.circlepath")
+            syncButton(text: mins > 120 ? "synced \(mins / 60) h ago" : "\(mins) min ago")
                 .foregroundStyle(mins > 120 ? .orange : .secondary)
         } else {
-            Label("never synced", systemImage: "arrow.triangle.2.circlepath")
+            syncButton(text: "never synced")
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// The refresh glyph is a button: click → daemon syncs within ~5 s.
+    private func syncButton(text: String) -> some View {
+        Button {
+            model.requestSync()
+        } label: {
+            Label(text, systemImage: "arrow.triangle.2.circlepath")
+        }
+        .buttonStyle(.plain)
+        .help("Sync now")
     }
 }
 
@@ -72,6 +82,7 @@ struct VendorCard: View {
     let series: [DayCost]
     let isCollapsed: Bool
     let toggle: () -> Void
+    @State private var hoverDay: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -79,6 +90,12 @@ struct VendorCard: View {
             HStack {
                 Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
                     .font(.caption2).foregroundStyle(.tertiary)
+                if let icon = Self.vendorIcon(vendor.vendor) {
+                    Image(nsImage: icon)
+                        .resizable().interpolation(.high)
+                        .frame(width: 16, height: 16)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
                 Text(vendorDisplayName).bold()
                 if isCollapsed {
                     Text("today \(usd(vendor.todayUSD))")
@@ -103,24 +120,45 @@ struct VendorCard: View {
 
     @ViewBuilder private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("today \(usd(vendor.todayUSD))")
-                .font(.caption).foregroundStyle(.secondary)
+            if let day = hoverDay, let point = filledSeries.first(where: { $0.day == day }) {
+                Text("\(prettyDay(day)) · \(usd(point.costUSD))")
+                    .font(.caption).foregroundStyle(.primary)
+            } else {
+                Text("today \(usd(vendor.todayUSD))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
 
             if !series.isEmpty {
-                Chart(filledSeries, id: \.day) { point in
+                let filled = filledSeries
+                Chart(filled, id: \.day) { point in
                     BarMark(x: .value("Day", String(point.day.suffix(5))),
                             y: .value("USD", point.costUSD))
-                        .foregroundStyle(.blue.opacity(0.7))
+                        .foregroundStyle(.blue.opacity(hoverDay == nil || hoverDay == point.day ? 0.7 : 0.3))
                 }
-                .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                        AxisValueLabel().font(.system(size: 7))
-                    }
-                }
+                .chartXAxis(.hidden)
                 .chartYAxis {
                     AxisMarks(values: .automatic(desiredCount: 3)) { _ in
                         AxisGridLine()
                         AxisValueLabel().font(.system(size: 7))
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Rectangle().fill(.clear).contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    guard let plotFrame = proxy.plotFrame else { hoverDay = nil; return }
+                                    let x = location.x - geo[plotFrame].origin.x
+                                    if let suffix: String = proxy.value(atX: x) {
+                                        hoverDay = filled.first { $0.day.hasSuffix(suffix) }?.day
+                                    } else {
+                                        hoverDay = nil
+                                    }
+                                case .ended:
+                                    hoverDay = nil
+                                }
+                            }
                     }
                 }
                 .frame(height: 56)
@@ -154,7 +192,13 @@ struct VendorCard: View {
             // isn't guaranteed unique across accounts, so identify rows by the
             // whole value rather than `id: \.apiKeyID` as originally sketched.
             if !vendor.topKeys.isEmpty {
-                Text("API keys · total spend").font(.caption2).foregroundStyle(.tertiary)
+                // OpenRouter reports lifetime per-key totals; OpenAI real 30-day
+                // dollars; Anthropic has no per-key cost API, so 30-day estimates
+                // allocated from org cost by token share.
+                Text(vendor.vendor == "anthropic" ? "API keys · 30-day est. spend"
+                     : vendor.vendor == "openai" ? "API keys · 30-day spend"
+                     : "API keys · total spend")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
             ForEach(vendor.topKeys, id: \.self) { k in
                 HStack {
@@ -180,9 +224,36 @@ struct VendorCard: View {
         }
     }
 
+    /// "2026-07-19" → "Jul 19" for the hover readout.
+    private func prettyDay(_ day: String) -> String {
+        let parse = DateFormatter()
+        parse.locale = Locale(identifier: "en_US_POSIX")
+        parse.calendar = Calendar(identifier: .gregorian)
+        parse.dateFormat = "yyyy-MM-dd"; parse.timeZone = TimeZone(identifier: "UTC")
+        guard let date = parse.date(from: day) else { return day }
+        let out = DateFormatter()
+        out.locale = Locale(identifier: "en_US_POSIX")
+        out.timeZone = TimeZone(identifier: "UTC")
+        out.dateFormat = "MMM d"
+        return out.string(from: date)
+    }
+
+    /// Bundled favicon for a vendor (Resources/VendorIcons/<vendor>.png,
+    /// embedded by a project.yml post-build script). Cached — cards re-render
+    /// on every hover tick and disk I/O per frame would stutter the chart.
+    private static var iconCache: [String: NSImage?] = [:]
+    static func vendorIcon(_ vendor: String) -> NSImage? {
+        if let cached = iconCache[vendor] { return cached }
+        let url = Bundle.main.url(forResource: vendor, withExtension: "png", subdirectory: "VendorIcons")
+        let image = url.flatMap { NSImage(contentsOf: $0) }
+        iconCache[vendor] = image
+        return image
+    }
+
     private var vendorDisplayName: String {
         switch vendor.vendor {
         case "openrouter": "OpenRouter"
+        case "openai": "OpenAI"
         default: vendor.vendor.capitalized
         }
     }

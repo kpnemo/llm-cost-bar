@@ -61,3 +61,7 @@ targets:
           if [ -f "$SRCROOT/Resources/AppIcon.icns" ]; then
             cp "$SRCROOT/Resources/AppIcon.icns" "$CODESIGNING_FOLDER_PATH/Contents/Resources/AppIcon.icns"
           fi
+      - name: Embed vendor icons
+        script: |
+          mkdir -p "$CODESIGNING_FOLDER_PATH/Contents/Resources/VendorIcons"
+          cp "$SRCROOT/Resources/VendorIcons/"*.png "$CODESIGNING_FOLDER_PATH/Contents/Resources/VendorIcons/" 2>/dev/null || true

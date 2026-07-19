@@ -45,10 +45,15 @@ struct AccountsTab: View {
         "Anthropic": ProviderInfo(
             vendor: "anthropic",
             keyName: "Admin API key",
-            keyURL: "https://console.anthropic.com/settings/admin-keys",
-            step1: "Open the Anthropic Console admin keys page and create an *Admin API key* (sk-ant-admin…, requires org admin; usage appears with ~5 min delay):"),
+            keyURL: "https://platform.claude.com/settings/admin-keys",
+            step1: "Open the Claude Console admin keys page and create an *Admin API key* (sk-ant-admin…). Needs the org *admin* role; individual accounts must first create an organization in Console → Settings → Organization. Usage appears with ~5 min delay:"),
+        "OpenAI": ProviderInfo(
+            vendor: "openai",
+            keyName: "Admin API key",
+            keyURL: "https://platform.openai.com/settings/organization/admin-keys",
+            step1: "Open the OpenAI admin keys page and create an *Admin API key* (sk-admin…, requires the org *owner* role — project keys can't read org costs):"),
     ]
-    private let comingSoon = ["OpenAI", "Gemini"]
+    private let comingSoon = ["Gemini"]
 
     var body: some View {
         Form {
@@ -86,6 +91,7 @@ struct AccountsTab: View {
                     Picker("Provider", selection: $selectedProvider) {
                         Text("OpenRouter").tag("OpenRouter")
                         Text("Anthropic").tag("Anthropic")
+                        Text("OpenAI").tag("OpenAI")
                         ForEach(comingSoon, id: \.self) { Text("\($0) — coming soon").tag($0).selectionDisabled() }
                     }
                     TextField("Account name", text: $newName)
