@@ -31,7 +31,8 @@ final class UsageStoreTests: XCTestCase {
                         model: "anthropic/claude-sonnet-4", day: "2026-07-01",
                         requests: 50, tokensIn: 9000, tokensOut: 4000, costUSD: 59.10),
         ])
-        try store.upsertBalance(vendor: "openrouter", accountID: "acc1", balanceUSD: 38.50)
+        try store.upsertBalance(vendor: "openrouter", accountID: "acc1",
+                                balance: Balance(balanceUSD: 38.50, totalCreditsUSD: 110, totalUsageUSD: 71.5))
         try store.upsertKeyTotals(vendor: "openrouter", accountID: "acc1", totals: [
             KeyTotal(apiKeyID: "claude-code", totalUSD: 120.5),
             KeyTotal(apiKeyID: "research-bot", totalUSD: 12.25),
@@ -63,6 +64,8 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(v.todayUSD, 2.10, accuracy: 0.001)
         XCTAssertEqual(v.monthUSD, 61.20, accuracy: 0.001)
         XCTAssertEqual(v.balanceUSD, 38.50)
+        XCTAssertEqual(v.creditsTotalUSD, 110)
+        XCTAssertEqual(v.creditsUsedUSD, 71.5)
         XCTAssertEqual(v.topKeys.count, 2)                        // zero-spend keys hidden
         XCTAssertEqual(v.topKeys.first?.apiKeyID, "claude-code")  // ranked by lifetime spend
         XCTAssertEqual(v.topKeys.first?.accountID, "acc1")

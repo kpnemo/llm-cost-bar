@@ -28,7 +28,11 @@ public struct KeyTotal: Equatable, Sendable {
 
 public struct Balance: Equatable, Sendable {
     public var balanceUSD: Double
-    public init(balanceUSD: Double) { self.balanceUSD = balanceUSD }
+    public var totalCreditsUSD: Double?   // lifetime credits purchased (nil if vendor doesn't expose it)
+    public var totalUsageUSD: Double?     // lifetime credits consumed
+    public init(balanceUSD: Double, totalCreditsUSD: Double? = nil, totalUsageUSD: Double? = nil) {
+        self.balanceUSD = balanceUSD; self.totalCreditsUSD = totalCreditsUSD; self.totalUsageUSD = totalUsageUSD
+    }
 }
 
 public struct AccountInfo: Equatable, Sendable {

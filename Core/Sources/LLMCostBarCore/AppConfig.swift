@@ -6,7 +6,7 @@ public enum MenuBarDisplay: String, Codable, CaseIterable, Sendable {
 
 public struct AppConfig: Codable, Equatable, Sendable {
     public var refreshMinutes: Int = 15
-    public var menuBarDisplay: MenuBarDisplay = .today
+    public var menuBarDisplay: MenuBarDisplay = .monthToDate
     public var keepAppAlive: Bool = true
 
     public init() {}

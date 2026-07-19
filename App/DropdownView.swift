@@ -66,13 +66,31 @@ struct VendorCard: View {
             HStack {
                 Text(vendorDisplayName).bold()
                 Spacer()
-                Text(usd(vendor.todayUSD)).bold()
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(usd(vendor.monthUSD)).bold()
+                    Text("this month").font(.caption2).foregroundStyle(.tertiary)
+                }
             }
-            HStack(spacing: 8) {
-                if let b = vendor.balanceUSD { Text("balance \(usd(b))") }
-                Text("MTD \(usd(vendor.monthUSD))")
+            Text("today \(usd(vendor.todayUSD))")
+                .font(.caption).foregroundStyle(.secondary)
+
+            if let total = vendor.creditsTotalUSD, let used = vendor.creditsUsedUSD, total > 0 {
+                let fraction = min(used / total, 1.0)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("credits: \(usd(vendor.balanceUSD ?? total - used)) left of \(usd(total))")
+                        Spacer()
+                        Text("\(Int(fraction * 100))% used")
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                    ProgressView(value: fraction)
+                        .tint(fraction < 0.7 ? .green : (fraction < 0.9 ? .orange : .red))
+                        .controlSize(.small)
+                }
+                .padding(.vertical, 2)
+            } else if let b = vendor.balanceUSD {
+                Text("balance \(usd(b))").font(.caption).foregroundStyle(.secondary)
             }
-            .font(.caption).foregroundStyle(.secondary)
 
             if account?.needsReauth == true {
                 Label("reconnect needed — open Settings", systemImage: "key.slash")

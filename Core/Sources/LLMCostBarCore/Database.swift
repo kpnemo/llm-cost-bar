@@ -56,6 +56,12 @@ public enum Database {
             );
             """)
         }
+        m.registerMigration("v3-credit-totals") { db in
+            try db.execute(sql: """
+            ALTER TABLE balances ADD COLUMN total_credits REAL;
+            ALTER TABLE balances ADD COLUMN total_usage REAL;
+            """)
+        }
         return m
     }
 }

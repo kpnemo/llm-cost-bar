@@ -74,8 +74,7 @@ public final class SyncEngine: @unchecked Sendable {
         // or clears the sync-ok state set above. Only .auth here implies the key is genuinely dead.
         do {
             if let balance = try await withRetry(sleeper: sleeper) { try await provider.fetchBalance() } {
-                try store.upsertBalance(vendor: account.vendor, accountID: account.id,
-                                        balanceUSD: balance.balanceUSD)
+                try store.upsertBalance(vendor: account.vendor, accountID: account.id, balance: balance)
             }
         } catch let e as ProviderError {
             handle(e, account: account, endpoint: "balance", setReauthOnAuth: true)
