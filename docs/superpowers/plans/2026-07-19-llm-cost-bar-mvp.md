@@ -1101,7 +1101,9 @@ final class PKCETests: XCTestCase {
         let url = OpenRouterPairing.authURL(pkce: pkce)
         let s = url.absoluteString
         XCTAssertTrue(s.hasPrefix("https://openrouter.ai/auth?"))
-        XCTAssertTrue(s.contains("callback_url=llmcostbar://callback"))
+        // callback_url value is percent-encoded in the raw string, so assert the decoded query item
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        XCTAssertEqual(comps.queryItems?.first(where: { $0.name == "callback_url" })?.value, "llmcostbar://callback")
         XCTAssertTrue(s.contains("code_challenge=c"))
         XCTAssertTrue(s.contains("code_challenge_method=S256"))
     }
