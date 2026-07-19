@@ -63,7 +63,9 @@ public struct OpenRouterProvider: VendorProvider {
 
     public func fetchBalance() async throws -> Balance? {
         let resp = try await getJSON("credits", as: CreditsResp.self)
-        return Balance(balanceUSD: resp.data.total_credits - resp.data.total_usage)
+        return Balance(balanceUSD: resp.data.total_credits - resp.data.total_usage,
+                       totalCreditsUSD: resp.data.total_credits,
+                       totalUsageUSD: resp.data.total_usage)
     }
 
     public func fetchKeyTotals() async throws -> [KeyTotal] {

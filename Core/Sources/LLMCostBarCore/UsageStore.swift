@@ -18,6 +18,8 @@ public struct VendorSummary: Equatable, Sendable {
     public var todayUSD: Double
     public var monthUSD: Double
     public var balanceUSD: Double?
+    public var creditsTotalUSD: Double?
+    public var creditsUsedUSD: Double?
     public var topKeys: [KeySpend]
 }
 
@@ -88,12 +90,13 @@ public final class UsageStore: Sendable {
         }
     }
 
-    public func upsertBalance(vendor: String, accountID: String, balanceUSD: Double, now: Date = Date()) throws {
+    public func upsertBalance(vendor: String, accountID: String, balance: Balance, now: Date = Date()) throws {
         try db.write { db in
             try db.execute(sql: """
-                INSERT OR REPLACE INTO balances (vendor, account_id, balance_usd, fetched_at)
-                VALUES (?,?,?,?)
-                """, arguments: [vendor, accountID, balanceUSD, ISO8601DateFormatter().string(from: now)])
+                INSERT OR REPLACE INTO balances (vendor, account_id, balance_usd, total_credits, total_usage, fetched_at)
+                VALUES (?,?,?,?,?,?)
+                """, arguments: [vendor, accountID, balance.balanceUSD, balance.totalCreditsUSD,
+                                 balance.totalUsageUSD, ISO8601DateFormatter().string(from: now)])
         }
     }
 
@@ -159,14 +162,20 @@ public final class UsageStore: Sendable {
                                             arguments: [vendor, today]) ?? 0
                 let m = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day LIKE ? || '%'",
                                             arguments: [vendor, monthPrefix]) ?? 0
-                let bal = try Double.fetchOne(db, sql: "SELECT SUM(balance_usd) FROM balances WHERE vendor = ?",
-                                              arguments: [vendor])
+                let balRow = try Row.fetchOne(db, sql: """
+                    SELECT SUM(balance_usd) AS b, SUM(total_credits) AS tc, SUM(total_usage) AS tu
+                    FROM balances WHERE vendor = ?
+                    """, arguments: [vendor])
+                let bal: Double? = balRow?["b"]
+                let credTotal: Double? = balRow?["tc"]
+                let credUsed: Double? = balRow?["tu"]
                 let keys = try Row.fetchAll(db, sql: """
                     SELECT account_id, api_key_id, total_usd FROM key_totals
                     WHERE vendor = ? AND total_usd > 0 ORDER BY total_usd DESC LIMIT 5
                     """, arguments: [vendor])
                     .map { KeySpend(accountID: $0["account_id"], apiKeyID: $0["api_key_id"], totalUSD: $0["total_usd"]) }
-                return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, balanceUSD: bal, topKeys: keys)
+                return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, balanceUSD: bal,
+                                     creditsTotalUSD: credTotal, creditsUsedUSD: credUsed, topKeys: keys)
             }
         }
     }

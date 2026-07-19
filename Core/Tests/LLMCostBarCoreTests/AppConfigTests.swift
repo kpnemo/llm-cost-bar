@@ -7,13 +7,13 @@ final class AppConfigTests: XCTestCase {
             .appendingPathComponent("cfg-\(UUID().uuidString).json")
         var cfg = AppConfig.load(from: url)              // missing file → defaults
         XCTAssertEqual(cfg.refreshMinutes, 15)
-        XCTAssertEqual(cfg.menuBarDisplay, .today)
+        XCTAssertEqual(cfg.menuBarDisplay, .monthToDate)
         XCTAssertTrue(cfg.keepAppAlive)
         cfg.refreshMinutes = 30
-        cfg.menuBarDisplay = .monthToDate
+        cfg.menuBarDisplay = .today
         try cfg.save(to: url)
         XCTAssertEqual(AppConfig.load(from: url).refreshMinutes, 30)
-        XCTAssertEqual(AppConfig.load(from: url).menuBarDisplay, .monthToDate)
+        XCTAssertEqual(AppConfig.load(from: url).menuBarDisplay, .today)
     }
 
     func testCorruptFileFallsBackToDefaults() throws {
