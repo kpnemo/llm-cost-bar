@@ -7,5 +7,8 @@
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ProcessType</key><string>Background</string>
+    <key>ThrottleInterval</key><integer>60</integer>
+    <key>StandardOutPath</key><string>/tmp/llmcostd.out.log</string>
+    <key>StandardErrorPath</key><string>/tmp/llmcostd.err.log</string>
 </dict>
 </plist>

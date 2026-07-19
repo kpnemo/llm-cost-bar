@@ -33,6 +33,13 @@ public struct Credential: Sendable {
     public init(apiKey: String) { self.apiKey = apiKey }
 }
 
+/// Shared identifiers used by both the App and daemon targets.
+public enum AppIDs {
+    public static let app = "com.mikeb.LLMCostBar"
+    public static let daemonLabel = "com.mikeb.llmcostd"
+    public static let subsystem = "com.mikeb.llmcostbar"
+}
+
 /// Error taxonomy drives sync behavior: transient → retry/backoff, auth → needs_reauth, decode → log loudly.
 public enum ProviderError: Error, Equatable, Sendable {
     case transient(String)               // network, timeout, 429, 5xx
