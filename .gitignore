@@ -1,3 +1,7 @@
 .superpowers/
 .remember/
 .DS_Store
+Signing.xcconfig
+*.xcodeproj
+DerivedData/
+Core/.build/

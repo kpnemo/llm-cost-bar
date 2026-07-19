@@ -201,7 +201,7 @@ public struct Credential: Sendable {
 }
 
 /// Error taxonomy drives sync behavior: transient → retry/backoff, auth → needs_reauth, decode → log loudly.
-public enum ProviderError: Error, Equatable {
+public enum ProviderError: Error, Equatable, Sendable {
     case transient(String)               // network, timeout, 429, 5xx
     case auth(Int, String)               // 401/403 — do NOT retry
     case http(Int, String)               // other unexpected status (snippet included)
@@ -218,6 +218,8 @@ public enum Day {
     /// Today's date as "yyyy-MM-dd" in UTC.
     public static func utcToday(now: Date = Date()) -> String {
         let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.calendar = Calendar(identifier: .gregorian)
         fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")
         return fmt.string(from: now)
     }
@@ -1099,7 +1101,9 @@ final class PKCETests: XCTestCase {
         let url = OpenRouterPairing.authURL(pkce: pkce)
         let s = url.absoluteString
         XCTAssertTrue(s.hasPrefix("https://openrouter.ai/auth?"))
-        XCTAssertTrue(s.contains("callback_url=llmcostbar://callback"))
+        // callback_url value is percent-encoded in the raw string, so assert the decoded query item
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        XCTAssertEqual(comps.queryItems?.first(where: { $0.name == "callback_url" })?.value, "llmcostbar://callback")
         XCTAssertTrue(s.contains("code_challenge=c"))
         XCTAssertTrue(s.contains("code_challenge_method=S256"))
     }
