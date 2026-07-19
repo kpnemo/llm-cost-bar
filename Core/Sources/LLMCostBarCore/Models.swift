@@ -32,6 +32,35 @@ public struct KeyTotal: Equatable, Sendable {
     }
 }
 
+extension KeyTotal {
+    /// Collapse per-key per-day dollars into window sums (total / MTD / today),
+    /// merging distinct key ids that share a display name into one row, sorted
+    /// MTD desc, then total desc, then name asc (deterministic across refreshes).
+    static func aggregate(perKeyDay: [String: [String: Double]],
+                          names: [String: String], now: Date) -> [KeyTotal] {
+        let today = Day.utcToday(now: now)
+        let monthStart = Day.utcMonthPrefix(now: now) + "-01"
+        var byName: [String: (total: Double, mtd: Double, today: Double)] = [:]
+        for (id, dayMap) in perKeyDay {
+            let name = names[id] ?? id
+            var agg = byName[name] ?? (0, 0, 0)
+            for (day, usd) in dayMap {
+                agg.total += usd
+                if day >= monthStart { agg.mtd += usd }
+                if day == today { agg.today += usd }
+            }
+            byName[name] = agg
+        }
+        return byName.map { KeyTotal(apiKeyID: $0.key, totalUSD: $0.value.total,
+                                     todayUSD: $0.value.today, mtdUSD: $0.value.mtd) }
+            .sorted {
+                if ($0.mtdUSD ?? 0) != ($1.mtdUSD ?? 0) { return ($0.mtdUSD ?? 0) > ($1.mtdUSD ?? 0) }
+                if $0.totalUSD != $1.totalUSD { return $0.totalUSD > $1.totalUSD }
+                return $0.apiKeyID < $1.apiKeyID
+            }
+    }
+}
+
 public struct Balance: Equatable, Sendable {
     public var balanceUSD: Double
     public var totalCreditsUSD: Double?   // lifetime credits purchased (nil if vendor doesn't expose it)

@@ -46,10 +46,10 @@ final class OpenAIProviderTests: XCTestCase {
         XCTAssertEqual(sessions?.costUSD ?? 0, 0.5, accuracy: 0.001)
     }
 
-    // Fixture bucket day is 2026-07-18 (see keyCostsJSON's start_time comment
-    // below); fix `now` to a later day in the same UTC month so mtd/today are
-    // deterministic instead of drifting with the real clock.
-    // 1784980800 = 2026-07-25T12:00:00Z.
+    // keyCostsJSON's bucket start_time is 1784332800 = 2026-07-18T00:00:00Z (see
+    // lineItemCostsJSON's comment above — same epoch, reused here). Fix `now` to
+    // a later day in the same UTC month so mtd/today are deterministic instead
+    // of drifting with the real clock. 1784980800 = 2026-07-25T12:00:00Z.
     let fixedNow = Date(timeIntervalSince1970: 1_784_980_800)
 
     func testKeyTotalsAreRealDollarsWithNames() async throws {

@@ -215,27 +215,8 @@ public struct AnthropicProvider: VendorProvider {
         guard !perKeyDay.isEmpty else { return [] }
 
         // 4) window sums + id → name mapping (merge same-named keys)
-        let today = Day.utcToday(now: now)
-        let monthStart = Day.utcMonthPrefix(now: now) + "-01"
         let names = (try? await fetchKeyNames()) ?? [:]
-        var byName: [String: (total: Double, mtd: Double, today: Double)] = [:]
-        for (id, dayMap) in perKeyDay {
-            let name = names[id] ?? id
-            var agg = byName[name] ?? (0, 0, 0)
-            for (day, usd) in dayMap {
-                agg.total += usd
-                if day >= monthStart { agg.mtd += usd }
-                if day == today { agg.today += usd }
-            }
-            byName[name] = agg
-        }
-        return byName.map { KeyTotal(apiKeyID: $0.key, totalUSD: $0.value.total,
-                                     todayUSD: $0.value.today, mtdUSD: $0.value.mtd) }
-            .sorted {
-                if ($0.mtdUSD ?? 0) != ($1.mtdUSD ?? 0) { return ($0.mtdUSD ?? 0) > ($1.mtdUSD ?? 0) }
-                if $0.totalUSD != $1.totalUSD { return $0.totalUSD > $1.totalUSD }
-                return $0.apiKeyID < $1.apiKeyID
-            }
+        return KeyTotal.aggregate(perKeyDay: perKeyDay, names: names, now: now)
     }
 
     private func fetchKeyNames() async throws -> [String: String] {
