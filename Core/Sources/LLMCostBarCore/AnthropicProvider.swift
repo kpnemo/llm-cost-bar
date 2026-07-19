@@ -131,9 +131,8 @@ public struct AnthropicProvider: VendorProvider {
     /// cost_report dollars across its keys by weight share. Cost on models
     /// with no usage attribution is split by overall weight share, so the
     /// per-key estimates always sum to the vendor-reported total.
-    public func fetchKeyTotals() async throws -> [KeyTotal] {
+    public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
         let days = 30
-        let now = Date()
         let startDay = Day.utcToday(now: now.addingTimeInterval(-Double(days) * 86400))
         let endDay = Day.utcToday(now: now.addingTimeInterval(86400))
 

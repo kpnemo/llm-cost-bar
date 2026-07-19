@@ -90,7 +90,7 @@ public final class SyncEngine: @unchecked Sendable {
 
         // Per-key lifetime totals — best-effort like balance; never blocks usage sync.
         do {
-            let totals = try await withRetry(sleeper: sleeper) { try await provider.fetchKeyTotals() }
+            let totals = try await withRetry(sleeper: sleeper) { try await provider.fetchKeyTotals(now: Date()) }
             try store.upsertKeyTotals(vendor: account.vendor, accountID: account.id, totals: totals)
         } catch let e as ProviderError {
             handle(e, account: account, endpoint: "keys", setReauthOnAuth: false)

@@ -142,9 +142,9 @@ public struct OpenAIProvider: VendorProvider {
     /// Real per-key dollars over the last 30 days, straight from the vendor
     /// (group_by=api_key_id). Rows without a key (dashboard/playground and
     /// non-key costs) are skipped rather than shown as a phantom key.
-    public func fetchKeyTotals() async throws -> [KeyTotal] {
+    public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
         var totals: [String: Double] = [:]
-        try await costs(startingDaysAgo: 30, now: Date(), groupBy: "api_key_id") { _, row in
+        try await costs(startingDaysAgo: 30, now: now, groupBy: "api_key_id") { _, row in
             guard let keyID = row.api_key_id, let usd = row.amount?.value?.double, usd != 0 else { return }
             totals[keyID, default: 0] += usd
         }

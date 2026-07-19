@@ -68,7 +68,7 @@ public struct OpenRouterProvider: VendorProvider {
                        totalUsageUSD: resp.data.total_usage)
     }
 
-    public func fetchKeyTotals() async throws -> [KeyTotal] {
+    public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
         let resp = try await getJSON("keys", as: KeysListResp.self)
         return resp.data.map {
             KeyTotal(apiKeyID: $0.name ?? $0.label ?? "unnamed", totalUSD: $0.usage ?? 0)

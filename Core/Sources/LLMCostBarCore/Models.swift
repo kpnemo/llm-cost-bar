@@ -18,14 +18,18 @@ public struct UsageRecord: Equatable, Sendable {
     }
 }
 
-/// One API key's spend total. The window depends on the vendor: OpenRouter
-/// reports lifetime totals from its key API; OpenAI real 30-day dollars;
-/// Anthropic 30-day estimates (no per-key cost API). The dropdown captions
-/// per vendor accordingly.
+/// One API key's spend. totalUSD window depends on the vendor: OpenRouter
+/// lifetime, OpenAI real 30-day dollars, Anthropic 30-day estimates.
+/// todayUSD/mtdUSD are nil when the vendor has no per-day key data (OpenRouter).
 public struct KeyTotal: Equatable, Sendable {
     public var apiKeyID: String
     public var totalUSD: Double
-    public init(apiKeyID: String, totalUSD: Double) { self.apiKeyID = apiKeyID; self.totalUSD = totalUSD }
+    public var todayUSD: Double?
+    public var mtdUSD: Double?
+    public init(apiKeyID: String, totalUSD: Double, todayUSD: Double? = nil, mtdUSD: Double? = nil) {
+        self.apiKeyID = apiKeyID; self.totalUSD = totalUSD
+        self.todayUSD = todayUSD; self.mtdUSD = mtdUSD
+    }
 }
 
 public struct Balance: Equatable, Sendable {
