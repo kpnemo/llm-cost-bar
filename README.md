@@ -1,61 +1,73 @@
 # LLM Cost Bar
 
-A macOS menu bar app that shows your LLM API spend across vendors in one place —
-today's burn, month-to-date, prepaid balance, and top API keys — with a
-supervised background daemon that keeps collecting even when you're not looking.
+[![Downloads](https://img.shields.io/github/downloads/kpnemo/llm-cost-bar/total?label=downloads&color=2ea44f)](https://github.com/kpnemo/llm-cost-bar/releases/latest)
 
-**Status:** MVP — OpenRouter supported. OpenAI, Anthropic, and Gemini are next
-(the provider interface is designed for it; see `docs/ARCHITECTURE.md`).
+A macOS menu-bar app that shows your LLM API spend across vendors in one
+place — today's live burn, month-to-date, credits, 30-day charts, and per-key
+breakdowns — with a supervised background daemon that keeps collecting even
+when you're not looking.
 
-## Features
+**Supported vendors:** OpenRouter, Anthropic, OpenAI. Gemini is pending
+(Google exposes no spend API for AI Studio keys yet).
 
-- Menu bar glance: icon + today's spend (configurable: icon only / today / MTD)
-- Dropdown with per-vendor cards: today, MTD, balance, top API keys
-- One-click pairing: browser-based OAuth (PKCE) for OpenRouter — no key pasting
-  (paste fallback available, and used for vendors without OAuth)
-- API keys stored in the macOS Keychain, never on disk
-- Background daemon (launchd) polls on your schedule, backfills after sleep,
-  and relaunches the app if it crashes; launchd relaunches the daemon
-- Every sync attempt logged to a Diagnostics view — no silent failures
+- **One glance** — menu bar shows today's spend or MTD (configurable).
+- **Per-vendor cards** — today, MTD, credits progress, a 30-day chart with
+  hover, and your top API keys by spend.
+- **Per-key spend** — real per-key dollars for OpenRouter and OpenAI;
+  smart estimates for Anthropic (which has no per-key cost API).
+- **Private by design** — no backend. Keys live in the macOS Keychain; usage
+  data goes straight from the vendor APIs to a local SQLite DB. See
+  [PRIVACY.md](PRIVACY.md).
+- **No silent failures** — every sync attempt lands in a Diagnostics view.
 
-## Install (from source)
+## Install
 
-Requirements: macOS 14+, Xcode 15+, [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-(`brew install xcodegen`), an Apple Development signing identity.
+1. Download **LLMCostBar.dmg** from the [latest release](../../releases/latest).
+2. Open the DMG and drag **LLM Cost Bar** into **Applications**.
+3. Launch it — it lives in the menu bar (no Dock icon). Open Settings and
+   connect a provider.
 
-    git clone <this repo> && cd LLM-cost-bar
-    echo "DEVELOPMENT_TEAM = <your team id>" > Signing.xcconfig
-    xcodegen generate
-    xcodebuild -scheme LLMCostBar -configuration Release build
-    # copy the built LLMCostBar.app to /Applications and open it
+The app is signed with a Developer ID and notarized by Apple — no Gatekeeper
+warnings. When the background daemon first reads a newly added key, macOS asks
+once per key; click **Always Allow**.
 
-On first launch, approve the background item in
-System Settings → General → Login Items.
+### Connecting providers
 
-### Signing
+| Vendor | What you need |
+| --- | --- |
+| OpenRouter | A **management key** from [openrouter.ai/settings/provisioning-keys](https://openrouter.ai/settings/provisioning-keys) (regular API keys can't read usage) |
+| Anthropic | An **Admin API key** (`sk-ant-admin…`) from [Claude Console → Admin keys](https://platform.claude.com/settings/admin-keys). Requires a team org — individual accounts must first use *Convert to team* in Console → Settings → Organization |
+| OpenAI | An **Admin API key** (`sk-admin…`) from [Settings → Organization → Admin keys](https://platform.openai.com/settings/organization/admin-keys) (org owner role) |
 
-The app and daemon share a Keychain access group, which needs a real team ID
-to resolve `$(AppIdentifierPrefix)` in the entitlements. Two ways to build:
+These elevated keys are read-only for billing data in practice, but treat them
+like secrets — the app stores them only in your Keychain.
 
-- **Signed (recommended):** open Xcode, sign into your Apple ID (Settings →
-  Accounts), then put that team's ID in `Signing.xcconfig` as shown above.
-  Free Apple ID accounts work fine for local, unnotarized builds.
-- **Unsigned local build:** skip `Signing.xcconfig` and pass
-  `CODE_SIGNING_ALLOWED=NO` to `xcodebuild` instead. This builds without any
-  Apple ID, but Keychain sharing between the app and daemon won't work
-  correctly, so pairing/credential storage may misbehave — fine for reading
-  the code or running `swift test`, not for daily use.
+## Build from source
 
-## Development
+Requires macOS 14+, Xcode 15+, and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`).
 
-Core logic is a SwiftPM package — fast tests, no Xcode needed:
+```bash
+git clone https://github.com/kpnemo/llm-cost-bar && cd llm-cost-bar
+echo "DEVELOPMENT_TEAM = <your team id>" > Signing.xcconfig   # or leave out for unsigned
+xcodegen generate
+xcodebuild -scheme LLMCostBar -configuration Release build
+cd Core && swift test        # all logic lives in a SwiftPM package
+```
 
-    cd Core && swift test
+For a local signed install there's `scripts/install_local.sh`; for a
+notarized release DMG, `scripts/release.sh` (Developer ID required).
 
-Layout: `Core/` (all logic: models, SQLite store, providers, sync engine),
-`Daemon/` (llmcostd loop), `App/` (SwiftUI menu bar UI). Design docs live in
-`docs/superpowers/specs/`, implementation plans in `docs/superpowers/plans/`,
-architecture overview in `docs/ARCHITECTURE.md`.
+Layout: `Core/` (models, SQLite store, vendor providers, sync engine — all
+logic and tests), `Daemon/` (`llmcostd` poll loop), `App/` (SwiftUI menu bar
+UI). Architecture notes in `docs/`.
+
+## Why isn't this on the Mac App Store?
+
+It ships a launchd background daemon and reads org-level billing APIs with
+keys you provide — a poor fit for sandbox review cycles. Like many menu-bar
+utilities, it's distributed directly as a notarized, Developer ID-signed app.
+It's free and open source.
 
 ## License
 

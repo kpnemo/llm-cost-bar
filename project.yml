@@ -45,6 +45,7 @@ targets:
     info:
       path: App/Info.plist
       properties:
+        CFBundleShortVersionString: "1.0.0"
         LSUIElement: true
         CFBundleDisplayName: LLM Cost Bar
         CFBundleIconFile: AppIcon
