@@ -23,6 +23,12 @@ public struct VendorSummary: Equatable, Sendable {
     public var topKeys: [KeySpend]
 }
 
+public struct DayCost: Equatable, Hashable, Sendable {
+    public var day: String
+    public var costUSD: Double
+    public init(day: String, costUSD: Double) { self.day = day; self.costUSD = costUSD }
+}
+
 public struct AccountRow: Equatable, Sendable {
     public var id: String
     public var vendor: String
@@ -73,6 +79,18 @@ public final class UsageStore: Sendable {
                     """, arguments: [r.vendor, r.accountID, r.apiKeyID, r.model, r.day,
                                      r.requests, r.tokensIn, r.tokensOut, r.costUSD])
             }
+        }
+    }
+
+    /// First-sync-of-the-day baseline of the vendor's lifetime usage counter.
+    /// INSERT OR IGNORE: only the first value of each UTC day sticks. Live "today"
+    /// spend = current lifetime usage − this baseline, immune to activity-feed lag.
+    public func recordDailyBaseline(vendor: String, accountID: String, day: String, totalUsageUSD: Double) throws {
+        try db.write { db in
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO usage_snapshots (vendor, account_id, day, baseline_usage_usd)
+                VALUES (?,?,?,?)
+                """, arguments: [vendor, accountID, day, totalUsageUSD])
         }
     }
 
@@ -146,22 +164,42 @@ public final class UsageStore: Sendable {
 
     public func summary(today: String, monthPrefix: String) throws -> Summary {
         try db.read { db in
-            let t = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE day = ?",
-                                        arguments: [today]) ?? 0
-            let m = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE day LIKE ? || '%'",
-                                        arguments: [monthPrefix]) ?? 0
-            return Summary(todayUSD: t, monthUSD: m)
+            let activityToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE day = ?",
+                                                    arguments: [today]) ?? 0
+            let monthBeforeToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE day LIKE ? || '%' AND day < ?",
+                                                       arguments: [monthPrefix, today]) ?? 0
+            let liveDelta = try Self.liveTodayDelta(db, vendor: nil, today: today)
+            // Activity feeds can lag the current day; the lifetime-usage delta is live.
+            // Take whichever knows more, and count today only once in the month total.
+            let t = max(activityToday, liveDelta)
+            return Summary(todayUSD: t, monthUSD: monthBeforeToday + t)
         }
+    }
+
+    /// Sum over accounts of (current lifetime usage − today's first-sync baseline), clamped ≥ 0.
+    private static func liveTodayDelta(_ db: GRDB.Database, vendor: String?, today: String) throws -> Double {
+        var sql = """
+            SELECT COALESCE(SUM(MAX(b.total_usage - s.baseline_usage_usd, 0)), 0)
+            FROM balances b
+            JOIN usage_snapshots s ON s.vendor = b.vendor AND s.account_id = b.account_id AND s.day = ?
+            WHERE b.total_usage IS NOT NULL
+            """
+        var args: [DatabaseValueConvertible] = [today]
+        if let vendor { sql += " AND b.vendor = ?"; args.append(vendor) }
+        return try Double.fetchOne(db, sql: sql, arguments: StatementArguments(args)) ?? 0
     }
 
     public func vendorSummaries(today: String, monthPrefix: String) throws -> [VendorSummary] {
         try db.read { db in
             let vendors = try String.fetchAll(db, sql: "SELECT DISTINCT vendor FROM accounts ORDER BY vendor")
             return try vendors.map { vendor in
-                let t = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day = ?",
-                                            arguments: [vendor, today]) ?? 0
-                let m = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day LIKE ? || '%'",
-                                            arguments: [vendor, monthPrefix]) ?? 0
+                let activityToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day = ?",
+                                                        arguments: [vendor, today]) ?? 0
+                let monthBeforeToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day LIKE ? || '%' AND day < ?",
+                                                           arguments: [vendor, monthPrefix, today]) ?? 0
+                let liveDelta = try Self.liveTodayDelta(db, vendor: vendor, today: today)
+                let t = max(activityToday, liveDelta)
+                let m = monthBeforeToday + t
                 let balRow = try Row.fetchOne(db, sql: """
                     SELECT SUM(balance_usd) AS b, SUM(total_credits) AS tc, SUM(total_usage) AS tu
                     FROM balances WHERE vendor = ?
@@ -177,6 +215,17 @@ public final class UsageStore: Sendable {
                 return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, balanceUSD: bal,
                                      creditsTotalUSD: credTotal, creditsUsedUSD: credUsed, topKeys: keys)
             }
+        }
+    }
+
+    /// Daily cost series for a vendor since `sinceDay` (inclusive), for charts.
+    public func dailyCosts(vendor: String, sinceDay: String) throws -> [DayCost] {
+        try db.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT day, COALESCE(SUM(cost_usd),0) AS c FROM usage_daily
+                WHERE vendor = ? AND day >= ? GROUP BY day ORDER BY day
+                """, arguments: [vendor, sinceDay])
+                .map { DayCost(day: $0["day"], costUSD: $0["c"]) }
         }
     }
 

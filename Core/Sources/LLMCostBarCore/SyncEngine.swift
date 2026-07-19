@@ -23,6 +23,7 @@ public final class SyncEngine: @unchecked Sendable {
     /// Default factory for production: routes by vendor id.
     public static func defaultProviderFactory(account: AccountRow, credential: Credential) -> VendorProvider {
         switch account.vendor {
+        case "anthropic": AnthropicProvider(accountID: account.id, credential: credential)
         default: OpenRouterProvider(accountID: account.id, credential: credential)
         }
     }
@@ -75,6 +76,10 @@ public final class SyncEngine: @unchecked Sendable {
         do {
             if let balance = try await withRetry(sleeper: sleeper) { try await provider.fetchBalance() } {
                 try store.upsertBalance(vendor: account.vendor, accountID: account.id, balance: balance)
+                if let totalUsage = balance.totalUsageUSD {
+                    try store.recordDailyBaseline(vendor: account.vendor, accountID: account.id,
+                                                  day: Day.utcToday(), totalUsageUSD: totalUsage)
+                }
             }
         } catch let e as ProviderError {
             handle(e, account: account, endpoint: "balance", setReauthOnAuth: true)

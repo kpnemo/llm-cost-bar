@@ -30,7 +30,25 @@ struct AccountsTab: View {
     @State private var selectedProvider = "OpenRouter"
     @State private var newName = "personal"
 
-    private let comingSoon = ["OpenAI", "Anthropic", "Gemini"]
+    private struct ProviderInfo {
+        let vendor: String
+        let keyName: String
+        let keyURL: String
+        let step1: String
+    }
+    private let providers: [String: ProviderInfo] = [
+        "OpenRouter": ProviderInfo(
+            vendor: "openrouter",
+            keyName: "management key",
+            keyURL: "https://openrouter.ai/settings/provisioning-keys",
+            step1: "Open your OpenRouter provisioning keys page and create a *management key* (a regular API key can't read usage):"),
+        "Anthropic": ProviderInfo(
+            vendor: "anthropic",
+            keyName: "Admin API key",
+            keyURL: "https://console.anthropic.com/settings/admin-keys",
+            step1: "Open the Anthropic Console admin keys page and create an *Admin API key* (sk-ant-admin…, requires org admin; usage appears with ~5 min delay):"),
+    ]
+    private let comingSoon = ["OpenAI", "Gemini"]
 
     var body: some View {
         Form {
@@ -67,20 +85,22 @@ struct AccountsTab: View {
                 Section("Add provider") {
                     Picker("Provider", selection: $selectedProvider) {
                         Text("OpenRouter").tag("OpenRouter")
+                        Text("Anthropic").tag("Anthropic")
                         ForEach(comingSoon, id: \.self) { Text("\($0) — coming soon").tag($0).selectionDisabled() }
                     }
                     TextField("Account name", text: $newName)
 
+                    let info = providers[selectedProvider] ?? providers["OpenRouter"]!
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("**Step 1.** Open your OpenRouter provisioning keys page and create a *management key* (a regular API key can't read usage):")
+                        Text("**Step 1.** \(info.step1)")
                             .font(.callout)
-                        Button("Open openrouter.ai provisioning keys ↗") {
-                            NSWorkspace.shared.open(URL(string: "https://openrouter.ai/settings/provisioning-keys")!)
+                        Button("Open \(selectedProvider) key settings ↗") {
+                            NSWorkspace.shared.open(URL(string: info.keyURL)!)
                         }
-                        Text("**Step 2.** Copy the new key, come back here, and click:")
+                        Text("**Step 2.** Copy the new \(info.keyName), come back here, and click:")
                             .font(.callout)
                         Button("Paste key from clipboard & Test connection") {
-                            pairing.addProviderFromClipboard(displayName: newName)
+                            pairing.addProviderFromClipboard(vendor: info.vendor, displayName: newName)
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(pairing.state == .exchanging)

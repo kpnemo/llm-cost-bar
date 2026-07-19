@@ -10,6 +10,7 @@ final class StoreModel: ObservableObject {
     @Published var syncLog: [SyncLogRow] = []
     @Published var config = AppConfig()
     @Published var lastHeartbeat: Date?
+    @Published var series: [String: [DayCost]] = [:]
 
     let paths = AppPaths.resolve()
     let store: UsageStore
@@ -53,6 +54,10 @@ final class StoreModel: ObservableObject {
         accounts = (try? store.accounts()) ?? accounts
         syncLog = (try? store.recentSyncLog(limit: 50)) ?? syncLog
         config = AppConfig.load(from: paths.config)
+        let since = Day.utcToday(now: Date().addingTimeInterval(-30 * 86400))
+        series = Dictionary(uniqueKeysWithValues: vendors.map {
+            ($0.vendor, (try? store.dailyCosts(vendor: $0.vendor, sinceDay: since)) ?? [])
+        })
         lastHeartbeat = (try? FileManager.default.attributesOfItem(atPath: paths.heartbeat.path)[.modificationDate]) as? Date
     }
 

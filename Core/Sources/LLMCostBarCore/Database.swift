@@ -62,6 +62,15 @@ public enum Database {
             ALTER TABLE balances ADD COLUMN total_usage REAL;
             """)
         }
+        m.registerMigration("v4-usage-snapshots") { db in
+            try db.execute(sql: """
+            CREATE TABLE usage_snapshots (
+                vendor TEXT NOT NULL, account_id TEXT NOT NULL, day TEXT NOT NULL,
+                baseline_usage_usd REAL NOT NULL,
+                PRIMARY KEY (vendor, account_id, day)
+            );
+            """)
+        }
         return m
     }
 }
