@@ -153,7 +153,7 @@ struct GeneralTab: View {
             Picker("Menu bar shows", selection: $model.config.menuBarDisplay) {
                 Text("Icon only").tag(MenuBarDisplay.iconOnly)
                 Text("Today's spend").tag(MenuBarDisplay.today)
-                Text("Month to date").tag(MenuBarDisplay.monthToDate)
+                Text("Month to date (MTD)").tag(MenuBarDisplay.monthToDate)
             }
             Picker("Refresh every", selection: $model.config.refreshMinutes) {
                 ForEach([5, 15, 30, 60], id: \.self) { Text("\($0) min").tag($0) }

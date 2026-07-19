@@ -106,7 +106,7 @@ struct VendorCard: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 0) {
                     Text(usd(vendor.monthUSD)).font(.title3).bold()
-                    Text("this month").font(.caption).foregroundStyle(.tertiary)
+                    Text("MTD").font(.caption).foregroundStyle(.tertiary)
                 }
             }
             .contentShape(Rectangle())
