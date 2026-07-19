@@ -1,6 +1,6 @@
 # LLM Cost Bar
 
-[![Downloads](https://img.shields.io/github/downloads/kpnemo/llm-cost-bar/total?label=downloads&color=2ea44f)](https://github.com/kpnemo/llm-cost-bar/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/kpnemo/llm-cost-bar/total?color=2ea44f&label=downloads)](https://github.com/kpnemo/llm-cost-bar/releases/latest)
 
 A macOS menu-bar app that shows your LLM API spend across vendors in one
 place — today's live burn, month-to-date, credits, 30-day charts, and per-key
