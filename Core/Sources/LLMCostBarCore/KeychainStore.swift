@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-public struct KeychainError: Error { public let status: OSStatus }
+public struct KeychainError: Error, Equatable, Sendable { public let status: OSStatus }
 
 /// Generic-password storage for vendor API keys. App and daemon share items via the
 /// keychain-access-groups entitlement (configured in Task 11); tests use the plain login keychain.
@@ -16,11 +16,15 @@ public final class KeychainStore: Sendable {
     }
 
     public func setKey(_ key: String, accountID: String) throws {
-        try deleteKey(accountID: accountID)
         var q = baseQuery(accountID)
         q[kSecValueData as String] = Data(key.utf8)
-        let status = SecItemAdd(q as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError(status: status) }
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addStatus = SecItemAdd(q as CFDictionary, nil)
+        if addStatus == errSecSuccess { return }
+        guard addStatus == errSecDuplicateItem else { throw KeychainError(status: addStatus) }
+        let updateStatus = SecItemUpdate(baseQuery(accountID) as CFDictionary,
+                                          [kSecValueData as String: Data(key.utf8)] as CFDictionary)
+        guard updateStatus == errSecSuccess else { throw KeychainError(status: updateStatus) }
     }
 
     public func getKey(accountID: String) throws -> String? {
