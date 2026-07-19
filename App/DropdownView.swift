@@ -44,7 +44,7 @@ struct DropdownView: View {
             .font(.body)
         }
         .padding(16)
-        .frame(width: 380)
+        .frame(width: 440)
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.pairing = pairing
             model.refresh()
@@ -86,28 +86,54 @@ struct VendorCard: View {
     let toggle: () -> Void
     @State private var hoverDay: String?
 
+    static let statWidth: CGFloat = 76
+
+    private func statColumn(_ amount: String, label: String, color: Color, dim: Bool = false) -> some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            Text(amount).font(.body.weight(.bold)).monospacedDigit()
+                .foregroundStyle(color).opacity(dim ? 0.45 : 1)
+            Text(label).font(.caption).foregroundStyle(.tertiary)
+        }
+        .frame(width: Self.statWidth, alignment: .trailing)
+    }
+
+    /// VoiceOver text for a key-row amount; nil → "no data".
+    private func axAmount(_ value: Double?) -> String {
+        value.map(usd) ?? "no data"
+    }
+
+    /// nil → "—" (old daemon rows mixed with new); values that display as
+    /// $0.00 render dim (nil and negatives don't).
+    private func keyCell(_ value: Double?, color: Color) -> some View {
+        let v = value ?? 1
+        return Text(value.map(usd) ?? "—")
+            .font(.subheadline).monospacedDigit()
+            .foregroundStyle(color)
+            .opacity(v < 0.005 && v >= 0 ? 0.45 : 1)
+            .frame(width: Self.statWidth, alignment: .trailing)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // Header row is the collapse toggle — always visible.
-            HStack {
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.caption).foregroundStyle(.tertiary)
-                if let icon = Self.vendorIcon(vendor.vendor) {
-                    Image(nsImage: icon)
-                        .resizable().interpolation(.high)
-                        .frame(width: 20, height: 20)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+            HStack(alignment: .firstTextBaseline) {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.caption).foregroundStyle(.tertiary)
+                    if let icon = Self.vendorIcon(vendor.vendor) {
+                        Image(nsImage: icon)
+                            .resizable().interpolation(.high)
+                            .frame(width: 20, height: 20)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    Text(vendorDisplayName).font(.title3).bold()
+                        .lineLimit(1).truncationMode(.tail)
                 }
-                Text(vendorDisplayName).font(.title3).bold()
-                if isCollapsed {
-                    Text("today \(usd(vendor.todayUSD))")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(usd(vendor.monthUSD)).font(.title3).bold()
-                    Text("MTD").font(.caption).foregroundStyle(.tertiary)
-                }
+                Spacer(minLength: 8)
+                statColumn(usd(vendor.todayUSD), label: "today", color: .blue,
+                           dim: vendor.todayUSD < 0.005)
+                statColumn(usd(vendor.monthUSD), label: "MTD", color: .primary)
+                statColumn(usd(vendor.last30USD), label: "30d", color: .secondary)
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: toggle)
@@ -122,12 +148,13 @@ struct VendorCard: View {
 
     @ViewBuilder private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let day = hoverDay, let point = filledSeries.first(where: { $0.day == day }) {
-                Text("\(prettyDay(day)) · \(usd(point.costUSD))")
-                    .font(.subheadline).foregroundStyle(.primary)
-            } else {
-                Text("today \(usd(vendor.todayUSD))")
-                    .font(.subheadline).foregroundStyle(.secondary)
+            Group {
+                if let day = hoverDay, let point = filledSeries.first(where: { $0.day == day }) {
+                    Text("\(prettyDay(day)) · \(usd(point.costUSD))")
+                        .font(.subheadline).foregroundStyle(.primary)
+                } else {
+                    Text(" ").font(.subheadline)
+                }
             }
 
             if !series.isEmpty {
@@ -190,25 +217,40 @@ struct VendorCard: View {
                     .font(.subheadline).foregroundStyle(.red)
             }
 
-            // KeySpend is Hashable (accountID + apiKeyID + todayUSD); apiKeyID alone
+            // KeySpend's synthesized Hashable covers all fields; apiKeyID alone
             // isn't guaranteed unique across accounts, so identify rows by the
-            // whole value rather than `id: \.apiKeyID` as originally sketched.
+            // whole value.
+            //
+            // OpenRouter reports lifetime per-key totals only (no daily data) →
+            // single column; OpenAI real per-day dollars; Anthropic per-day
+            // estimates allocated from org cost by token share.
             if !vendor.topKeys.isEmpty {
-                // OpenRouter reports lifetime per-key totals; OpenAI real 30-day
-                // dollars; Anthropic has no per-key cost API, so 30-day estimates
-                // allocated from org cost by token share.
-                Text(vendor.vendor == "anthropic" ? "API keys · 30-day est. spend"
-                     : vendor.vendor == "openai" ? "API keys · 30-day spend"
+                Text(vendor.vendor == "anthropic" ? "API keys · est. spend"
+                     : vendor.vendor == "openai" ? "API keys"
                      : "API keys · total spend")
                     .font(.caption).foregroundStyle(.tertiary)
             }
+            let hasWindows = vendor.topKeys.contains { $0.mtdUSD != nil }
             ForEach(vendor.topKeys, id: \.self) { k in
                 HStack {
-                    Text(k.apiKeyID).font(.subheadline)
-                    Spacer()
-                    Text(usd(k.totalUSD)).font(.subheadline)
+                    Text(k.apiKeyID).font(.subheadline).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 8)
+                    if hasWindows {
+                        keyCell(k.todayUSD, color: .blue)
+                        keyCell(k.mtdUSD, color: .primary)
+                        keyCell(k.totalUSD, color: .secondary)
+                    } else {
+                        Text(usd(k.totalUSD)).font(.subheadline).foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
                 }
-                .foregroundStyle(.secondary)
+                // VoiceOver: bare amounts carry no column semantics — read the
+                // whole row as one element with named columns.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(hasWindows
+                    ? "\(k.apiKeyID), today \(axAmount(k.todayUSD)), month to date \(axAmount(k.mtdUSD)), 30 days \(axAmount(k.totalUSD))"
+                    : "\(k.apiKeyID), total \(usd(k.totalUSD))")
             }
         }
     }

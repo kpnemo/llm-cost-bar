@@ -4,7 +4,7 @@ import LLMCostBarCore
 
 @MainActor
 final class StoreModel: ObservableObject {
-    @Published var summary = Summary(todayUSD: 0, monthUSD: 0)
+    @Published var summary = Summary(todayUSD: 0, monthUSD: 0, last30USD: 0)
     @Published var vendors: [VendorSummary] = []
     @Published var accounts: [AccountRow] = []
     @Published var syncLog: [SyncLogRow] = []
@@ -49,8 +49,9 @@ final class StoreModel: ObservableObject {
 
     func refresh() {
         let today = Day.utcToday(), month = Day.utcMonthPrefix()
-        summary = (try? store.summary(today: today, monthPrefix: month)) ?? summary
-        vendors = (try? store.vendorSummaries(today: today, monthPrefix: month)) ?? vendors
+        let last30Start = Day.last30Start()
+        summary = (try? store.summary(today: today, monthPrefix: month, last30Start: last30Start)) ?? summary
+        vendors = (try? store.vendorSummaries(today: today, monthPrefix: month, last30Start: last30Start)) ?? vendors
         accounts = (try? store.accounts()) ?? accounts
         syncLog = (try? store.recentSyncLog(limit: 50)) ?? syncLog
         config = AppConfig.load(from: paths.config)
@@ -71,6 +72,7 @@ final class StoreModel: ObservableObject {
         case .iconOnly: ""
         case .today: String(format: "$%.2f", summary.todayUSD)
         case .monthToDate: String(format: "$%.2f", summary.monthUSD)
+        case .last30Days: String(format: "$%.2f", summary.last30USD)
         }
     }
 

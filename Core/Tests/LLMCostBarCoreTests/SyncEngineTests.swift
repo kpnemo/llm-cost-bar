@@ -45,7 +45,7 @@ final class SyncEngineTests: XCTestCase {
                                       tokensIn: 10, tokensOut: 5, costUSD: 0.5)]
         await engine.syncAll()
         let s = try store.summary(today: Day.utcToday(), monthPrefix: Day.utcMonthPrefix(),
-                                  last30Start: Day.utcToday(now: Date().addingTimeInterval(-29 * 86400)))
+                                  last30Start: Day.last30Start())
         XCTAssertEqual(s.todayUSD, 0.5, accuracy: 0.001)
         XCTAssertNotNil(try store.accounts()[0].lastSyncOK)
         XCTAssertEqual(try store.recentSyncLog(limit: 1).first?.errorClass, "ok")
@@ -77,7 +77,7 @@ final class SyncEngineTests: XCTestCase {
         provider.balanceError = .transient("balance down")
         await engine.syncAll()
         let s = try store.summary(today: Day.utcToday(), monthPrefix: Day.utcMonthPrefix(),
-                                  last30Start: Day.utcToday(now: Date().addingTimeInterval(-29 * 86400)))
+                                  last30Start: Day.last30Start())
         XCTAssertEqual(s.todayUSD, 0.5, accuracy: 0.001)
         XCTAssertNotNil(try store.accounts()[0].lastSyncOK)
         XCTAssertFalse(try store.accounts()[0].needsReauth)

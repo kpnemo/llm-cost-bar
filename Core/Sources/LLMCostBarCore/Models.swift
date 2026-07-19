@@ -114,4 +114,8 @@ public enum Day {
     public static func utcMonthPrefix(now: Date = Date()) -> String {
         String(utcToday(now: now).prefix(7))
     }
+    /// Start of the trailing-30-day window: inclusive; window + today = 30 days.
+    public static func last30Start(now: Date = Date()) -> String {
+        utcToday(now: now.addingTimeInterval(-29 * 86400))
+    }
 }
