@@ -8,9 +8,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? FileManager.default.removeItem(at: paths.cleanQuitMark)   // we're alive
-        // Register the embedded daemon LaunchAgent (idempotent).
-        let agent = SMAppService.agent(plistName: "com.mikeb.llmcostd.plist")
-        if agent.status != .enabled { try? agent.register() }
+        ensureDaemonRegistered()
+    }
+
+    private func ensureDaemonRegistered() {
+        DaemonManager.ensure(heartbeatURL: paths.heartbeat)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -21,6 +23,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls where url.scheme == "llmcostbar" {
             pairing?.handleCallback(url: url)
         }
+    }
+}
+
+/// Manages the daemon as a classic user LaunchAgent (~/Library/LaunchAgents).
+/// Deliberately NOT SMAppService: BTM records a launch constraint (LWCR) for
+/// registered agents which, for locally dev-signed builds, pins the exact binary —
+/// after any rebuild the kernel SIGKILLs the daemon ("Launch Constraint Violation")
+/// and launchd wedges in EX_CONFIG spawn failures. A plain LaunchAgent has no
+/// constraint and survives rebuilds; the plist is rewritten whenever the app moves.
+enum DaemonManager {
+    static let label = "com.mikeb.llmcostd"
+
+    private static var plistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    }
+
+    /// Idempotent: (re)installs the agent only when the plist is out of date or the
+    /// daemon looks dead. Safe to call on every app launch.
+    static func ensure(heartbeatURL: URL, force: Bool = false) {
+        let daemonPath = Bundle.main.bundlePath + "/Contents/MacOS/llmcostd"
+        let plist: [String: Any] = [
+            "Label": label,
+            "Program": daemonPath,
+            "RunAtLoad": true,
+            "KeepAlive": true,
+            "ProcessType": "Background",
+            "ThrottleInterval": 60,
+            "StandardOutPath": "/tmp/llmcostd.out.log",
+            "StandardErrorPath": "/tmp/llmcostd.err.log",
+        ]
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        else { return }
+
+        let changed = (try? Data(contentsOf: plistURL)) != data
+        let heartbeatAge = (try? FileManager.default
+            .attributesOfItem(atPath: heartbeatURL.path)[.modificationDate] as? Date)
+            .map { Date().timeIntervalSince($0) }
+        let daemonLooksAlive = heartbeatAge.map { $0 < 120 } ?? false
+        guard force || changed || !daemonLooksAlive else { return }
+
+        try? FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? data.write(to: plistURL)
+
+        // One-time cleanup of any previous SMAppService/BTM registration.
+        let sm = SMAppService.agent(plistName: "com.mikeb.llmcostd.plist")
+        if sm.status == .enabled { try? sm.unregister() }
+
+        let uid = getuid()
+        runLaunchctl(["bootout", "gui/\(uid)/\(label)"])          // ignore failure
+        runLaunchctl(["bootstrap", "gui/\(uid)", plistURL.path])
+        runLaunchctl(["kickstart", "gui/\(uid)/\(label)"])
+    }
+
+    private static func runLaunchctl(_ args: [String]) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        p.arguments = args
+        try? p.run()
+        p.waitUntilExit()
     }
 }
 

@@ -6,3 +6,4 @@ Signing.xcconfig
 DerivedData/
 Core/.build/
 .firecrawl/
+build/

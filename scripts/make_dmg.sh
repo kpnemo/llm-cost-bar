@@ -9,7 +9,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CERT="LLM Cost Bar Dev"
+CERT=$(security find-identity -v -p codesigning \
+  | grep -E "Developer ID Application|Apple Development" | head -1 \
+  | sed -E 's/^[^"]*"([^"]+)".*/\1/')
+[ -z "$CERT" ] && CERT="LLM Cost Bar Dev"
 APP_NAME="LLM Cost Bar"
 SRC="build/dd/Build/Products/Release/LLMCostBar.app"
 STAGE="build/dmg-stage"

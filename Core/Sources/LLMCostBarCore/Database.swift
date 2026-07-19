@@ -47,6 +47,15 @@ public enum Database {
             CREATE INDEX idx_synclog_ts ON sync_log(ts DESC);
             """)
         }
+        m.registerMigration("v2") { db in
+            try db.execute(sql: """
+            CREATE TABLE key_totals (
+                vendor TEXT NOT NULL, account_id TEXT NOT NULL, api_key_id TEXT NOT NULL,
+                total_usd REAL NOT NULL, fetched_at TEXT NOT NULL,
+                PRIMARY KEY (vendor, account_id, api_key_id)
+            );
+            """)
+        }
         return m
     }
 }

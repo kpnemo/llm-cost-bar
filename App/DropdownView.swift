@@ -26,6 +26,7 @@ struct DropdownView: View {
             Divider()
             HStack {
                 Button("Settings…") { openSettings(); NSApp.activate(ignoringOtherApps: true) }
+                Button("Quit") { NSApp.terminate(nil) }
                 Spacer()
                 syncStatus
             }
@@ -81,11 +82,14 @@ struct VendorCard: View {
             // KeySpend is Hashable (accountID + apiKeyID + todayUSD); apiKeyID alone
             // isn't guaranteed unique across accounts, so identify rows by the
             // whole value rather than `id: \.apiKeyID` as originally sketched.
+            if !vendor.topKeys.isEmpty {
+                Text("API keys · total spend").font(.caption2).foregroundStyle(.tertiary)
+            }
             ForEach(vendor.topKeys, id: \.self) { k in
                 HStack {
-                    Text("key: \(k.apiKeyID)").font(.caption)
+                    Text(k.apiKeyID).font(.caption)
                     Spacer()
-                    Text(usd(k.todayUSD)).font(.caption)
+                    Text(usd(k.totalUSD)).font(.caption)
                 }
                 .foregroundStyle(.secondary)
             }

@@ -18,6 +18,14 @@ public struct UsageRecord: Equatable, Sendable {
     }
 }
 
+/// One API key's lifetime spend, from the vendor's key-management API
+/// (OpenRouter's activity feed has no per-key attribution; totals are the best available).
+public struct KeyTotal: Equatable, Sendable {
+    public var apiKeyID: String
+    public var totalUSD: Double
+    public init(apiKeyID: String, totalUSD: Double) { self.apiKeyID = apiKeyID; self.totalUSD = totalUSD }
+}
+
 public struct Balance: Equatable, Sendable {
     public var balanceUSD: Double
     public init(balanceUSD: Double) { self.balanceUSD = balanceUSD }
