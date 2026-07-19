@@ -7,11 +7,13 @@ final class FakeProvider: VendorProvider, @unchecked Sendable {
     var usage: [UsageRecord] = []
     var balance: Balance? = Balance(balanceUSD: 10)
     var error: ProviderError?
+    var balanceError: ProviderError?
     func validateCredentials() async throws -> AccountInfo { AccountInfo(label: "fake") }
     func fetchUsage(sinceDaysAgo: Int, now: Date) async throws -> [UsageRecord] {
         if let error { throw error }; return usage
     }
     func fetchBalance() async throws -> Balance? {
+        if let balanceError { throw balanceError }
         if let error { throw error }; return balance
     }
 }
@@ -65,6 +67,21 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertNil(try store.accounts()[0].lastSyncOK)
         XCTAssertFalse(try store.accounts()[0].needsReauth)   // transient ≠ reauth
         XCTAssertEqual(try store.recentSyncLog(limit: 5).first?.errorClass, "transient")
+    }
+
+    func testBalanceFailureDoesNotBlockUsageOrFlagReauth() async throws {
+        provider.usage = [UsageRecord(vendor: "openrouter", accountID: "acc1", apiKeyID: "k1",
+                                      model: "m", day: Day.utcToday(), requests: 1,
+                                      tokensIn: 10, tokensOut: 5, costUSD: 0.5)]
+        provider.balanceError = .transient("balance down")
+        await engine.syncAll()
+        let s = try store.summary(today: Day.utcToday(), monthPrefix: Day.utcMonthPrefix())
+        XCTAssertEqual(s.todayUSD, 0.5, accuracy: 0.001)
+        XCTAssertNotNil(try store.accounts()[0].lastSyncOK)
+        XCTAssertFalse(try store.accounts()[0].needsReauth)
+        let log = try store.recentSyncLog(limit: 5)
+        XCTAssertTrue(log.contains { $0.errorClass == "ok" && $0.endpoint == "sync" })
+        XCTAssertTrue(log.contains { $0.errorClass == "transient" && $0.endpoint == "balance" })
     }
 
     func testMissingCredentialLogsAuth() async throws {
