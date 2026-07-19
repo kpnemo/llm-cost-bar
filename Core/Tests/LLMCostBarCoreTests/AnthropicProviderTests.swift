@@ -86,12 +86,16 @@ final class AnthropicProviderTests: XCTestCase {
      "has_more":false,"last_id":"apikey_B"}
     """#
 
+    /// Fixed clock in the same month as the 2026-07-18 fixtures above:
+    /// 2026-07-20T12:00:00Z. Removes wall-clock dependence from MTD math.
+    let julyTwentiethNoon = Date(timeIntervalSince1970: 1_784_548_800)
+
     func testKeyTotalsAllocateCostByWeightedTokens() async throws {
         let http = FakeHTTP()
         http.responses["usage_report"] = (usageJSON, 200)
         http.responses["cost_report"] = (keyCostJSON, 200)
         http.responses["api_keys"] = (keysListJSON, 200)
-        let totals = try await makeProvider(http).fetchKeyTotals()
+        let totals = try await makeProvider(http).fetchKeyTotals(now: julyTwentiethNoon)
         XCTAssertEqual(totals.count, 2)
         XCTAssertEqual(totals[0].apiKeyID, "prod")            // named via api_keys list
         XCTAssertEqual(totals[0].totalUSD, 16.5, accuracy: 0.01)
@@ -99,6 +103,8 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(totals[1].totalUSD, 8.5, accuracy: 0.01)
         // Estimates must sum to the vendor-reported total ($25).
         XCTAssertEqual(totals.map(\.totalUSD).reduce(0, +), 25.0, accuracy: 0.01)
+        XCTAssertEqual(totals[0].mtdUSD ?? -1, 16.5, accuracy: 0.01)  // whole window in-month
+        XCTAssertEqual(totals[0].todayUSD ?? -1, 0.0, accuracy: 0.01) // fixtures are 07-18, now is 07-20
     }
 
     func testKeyTotalsEmptyWhenNoUsage() async throws {
@@ -106,7 +112,7 @@ final class AnthropicProviderTests: XCTestCase {
         http.responses["usage_report"] = (#"{"data":[],"has_more":false,"next_page":null}"#, 200)
         http.responses["cost_report"] = (#"{"data":[],"has_more":false,"next_page":null}"#, 200)
         http.responses["api_keys"] = (#"{"data":[],"has_more":false,"last_id":null}"#, 200)
-        let totals = try await makeProvider(http).fetchKeyTotals()
+        let totals = try await makeProvider(http).fetchKeyTotals(now: julyTwentiethNoon)
         XCTAssertTrue(totals.isEmpty)
     }
 
@@ -115,8 +121,73 @@ final class AnthropicProviderTests: XCTestCase {
         http.responses["usage_report"] = (usageJSON, 200)
         http.responses["cost_report"] = (keyCostJSON, 200)
         http.responses["api_keys"] = (#"{"error":"forbidden"}"#, 403)
-        let totals = try await makeProvider(http).fetchKeyTotals()
+        let totals = try await makeProvider(http).fetchKeyTotals(now: julyTwentiethNoon)
         XCTAssertEqual(totals.map(\.apiKeyID).sorted(), ["apikey_A", "apikey_B"])
+    }
+
+    /// Fixed clock: 2026-07-01T12:00:00Z — makes MTD/today assertions month-boundary-proof.
+    let julyFirstNoon = Date(timeIntervalSince1970: 1_782_907_200)
+
+    // Month boundary: usage/cost on 06-30 (key A) and 07-01 (key B), now = 07-01.
+    // Day-scoped allocation: 06-30's $10 must go to A only (B has zero weight that
+    // day despite a bigger window weight), 07-01's $20 to B only.
+    let boundaryUsageJSON = #"""
+    {"data":[
+      {"starting_at":"2026-06-30T00:00:00Z","ending_at":"2026-07-01T00:00:00Z","results":[
+        {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}
+      ]},
+      {"starting_at":"2026-07-01T00:00:00Z","ending_at":"2026-07-02T00:00:00Z","results":[
+        {"api_key_id":"apikey_B","model":"claude-opus-4-8","uncached_input_tokens":2000}
+      ]}
+    ],"has_more":false,"next_page":null}
+    """#
+    let boundaryCostJSON = #"""
+    {"data":[
+      {"starting_at":"2026-06-30T00:00:00Z","ending_at":"2026-07-01T00:00:00Z","results":[
+        {"currency":"USD","amount":"1000","model":"claude-opus-4-8","description":"opus"}
+      ]},
+      {"starting_at":"2026-07-01T00:00:00Z","ending_at":"2026-07-02T00:00:00Z","results":[
+        {"currency":"USD","amount":"2000","model":"claude-opus-4-8","description":"opus"}
+      ]}
+    ],"has_more":false,"next_page":null}
+    """#
+
+    func testKeyTotalsSplitTodayMTDAcrossMonthBoundary() async throws {
+        let http = FakeHTTP()
+        http.responses["usage_report"] = (boundaryUsageJSON, 200)
+        http.responses["cost_report"] = (boundaryCostJSON, 200)
+        http.responses["api_keys"] = (keysListJSON, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: julyFirstNoon)
+        XCTAssertEqual(totals.count, 2)
+        let a = totals.first { $0.apiKeyID == "prod" }!        // apikey_A, named
+        XCTAssertEqual(a.totalUSD, 10.0, accuracy: 0.01)
+        XCTAssertEqual(a.mtdUSD ?? -1, 0.0, accuracy: 0.01)    // 06-30 is last month
+        XCTAssertEqual(a.todayUSD ?? -1, 0.0, accuracy: 0.01)
+        let b = totals.first { $0.apiKeyID == "apikey_B" }!
+        XCTAssertEqual(b.totalUSD, 20.0, accuracy: 0.01)
+        XCTAssertEqual(b.mtdUSD ?? -1, 20.0, accuracy: 0.01)   // MTD == today on the 1st
+        XCTAssertEqual(b.todayUSD ?? -1, 20.0, accuracy: 0.01)
+        XCTAssertEqual(totals[0].apiKeyID, "apikey_B", "sorted by MTD desc")
+    }
+
+    // A day with cost but no usage rows at all falls back to window-wide weights.
+    func testZeroWeightDayFallsBackToWindowWeights() async throws {
+        let usageOnly0630 = #"""
+        {"data":[
+          {"starting_at":"2026-06-30T00:00:00Z","ending_at":"2026-07-01T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}
+          ]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let http = FakeHTTP()
+        http.responses["usage_report"] = (usageOnly0630, 200)
+        http.responses["cost_report"] = (boundaryCostJSON, 200)   // cost on both days
+        http.responses["api_keys"] = (keysListJSON, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: julyFirstNoon)
+        let a = totals.first { $0.apiKeyID == "prod" }!
+        XCTAssertEqual(a.totalUSD, 30.0, accuracy: 0.01)   // both days land on A
+        XCTAssertEqual(a.mtdUSD ?? -1, 20.0, accuracy: 0.01)
+        XCTAssertEqual(a.todayUSD ?? -1, 20.0, accuracy: 0.01)
     }
 
     /// cost_report paginates via has_more/next_page; all pages must be merged.

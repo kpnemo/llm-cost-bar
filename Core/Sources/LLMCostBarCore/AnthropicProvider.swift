@@ -7,8 +7,8 @@ import Foundation
 /// description which carries the model). Anthropic has no prepaid balance
 /// endpoint, so fetchBalance is nil. Per-key dollars are not exposed either
 /// (cost_report only groups by workspace/description), so fetchKeyTotals
-/// estimates them: each model's real cost is split across keys in proportion
-/// to price-weighted tokens from the usage report.
+/// estimates them: each day's real cost per model is split across keys in
+/// proportion to that day's price-weighted tokens from the usage report.
 public struct AnthropicProvider: VendorProvider {
     public let vendorID = "anthropic"
     let accountID: String
@@ -127,17 +127,23 @@ public struct AnthropicProvider: VendorProvider {
     }
 
     /// Anthropic has no per-key cost endpoint. Estimate: fetch weighted tokens
-    /// per (model, key) from the usage report, then split each model's real
-    /// cost_report dollars across its keys by weight share. Cost on models
-    /// with no usage attribution is split by overall weight share, so the
-    /// per-key estimates always sum to the vendor-reported total.
+    /// per (day, model, key) from the usage report, then split each day's real
+    /// cost_report dollars for a model across that day's keys by weight share.
+    /// Keeping the day dimension lets one pass yield totalUSD (30d window),
+    /// mtdUSD (days on/after the 1st of the current UTC month) and todayUSD.
+    /// Cost with no same-day usage attribution for its model is split by that
+    /// day's overall weights — or the whole window's weights when the day has
+    /// no usage rows at all — so the per-key estimates sum to the
+    /// vendor-reported total. Sole exception: cost on a day when the entire
+    /// window has zero usage weight is dropped (matches the returns-empty
+    /// contract when there is no usage at all).
     public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
         let days = 30
         let startDay = Day.utcToday(now: now.addingTimeInterval(-Double(days) * 86400))
         let endDay = Day.utcToday(now: now.addingTimeInterval(86400))
 
-        // 1) weighted tokens per (normalized model, api_key_id)
-        var weights: [String: [String: Double]] = [:]
+        // 1) weighted tokens per (day, normalized model, api_key_id)
+        var weights: [String: [String: [String: Double]]] = [:]   // day → model → key → weight
         var page: String? = nil
         var hops = 0
         repeat {
@@ -155,56 +161,81 @@ public struct AnthropicProvider: VendorProvider {
             comps.queryItems = items
             let resp = try await getJSON(comps.url!, as: UsageResp.self)
             for bucket in resp.data {
+                let day = String(bucket.starting_at.prefix(10))
                 for row in bucket.results ?? [] {
                     let w = weight(row)
                     guard w > 0 else { continue }
                     let model = Self.normalizeModel(row.model ?? "other")
                     // Workbench traffic has no api_key_id.
-                    weights[model, default: [:]][row.api_key_id ?? "workbench", default: 0] += w
+                    weights[day, default: [:]][model, default: [:]][row.api_key_id ?? "workbench", default: 0] += w
                 }
             }
             page = (resp.has_more == true) ? resp.next_page : nil
             hops += 1
         } while page != nil && hops < 10
 
-        // 2) real dollars per model over the same window
-        var costByModel: [String: Double] = [:]
+        // 2) real dollars per (day, normalized model)
+        var costByDayModel: [String: [String: Double]] = [:]
         for r in try await fetchUsage(sinceDaysAgo: days, now: now) {
-            costByModel[Self.normalizeModel(r.model), default: 0] += r.costUSD
+            costByDayModel[r.day, default: [:]][Self.normalizeModel(r.model), default: 0] += r.costUSD
         }
 
-        // 3) allocate each model's cost by weight share
-        var estimate: [String: Double] = [:]
-        var unattributed = 0.0
-        for (model, cost) in costByModel {
-            if let keyWeights = weights[model] {
-                let total = keyWeights.values.reduce(0, +)
-                for (key, w) in keyWeights { estimate[key, default: 0] += cost * w / total }
-            } else {
-                unattributed += cost
+        // window-wide per-key weights: fallback pool for days with cost but no usage rows
+        var windowKeyWeights: [String: Double] = [:]
+        for dayWeights in weights.values {
+            for keyWeights in dayWeights.values {
+                for (key, w) in keyWeights { windowKeyWeights[key, default: 0] += w }
             }
         }
-        // != 0, not > 0: negative unattributed cost (refunds/credits under a
-        // description with no usage rows) must also be spread, or the per-key
-        // sum drifts above the vendor-reported total.
-        if unattributed != 0 {
-            var perKey: [String: Double] = [:]
-            for keyWeights in weights.values {
-                for (key, w) in keyWeights { perKey[key, default: 0] += w }
-            }
-            let total = perKey.values.reduce(0, +)
-            if total > 0 {
-                for (key, w) in perKey { estimate[key, default: 0] += unattributed * w / total }
-            }
-        }
-        guard !estimate.isEmpty else { return [] }
 
-        // 4) apikey_… ids → display names (best effort; ids shown on failure)
+        // 3) allocate day by day; != 0 so negative refunds are spread too
+        var perKeyDay: [String: [String: Double]] = [:]           // key → day → usd
+        for (day, models) in costByDayModel {
+            var unattributed = 0.0
+            for (model, cost) in models {
+                if let keyWeights = weights[day]?[model], !keyWeights.isEmpty {
+                    let total = keyWeights.values.reduce(0, +)
+                    for (key, w) in keyWeights { perKeyDay[key, default: [:]][day, default: 0] += cost * w / total }
+                } else {
+                    unattributed += cost
+                }
+            }
+            if unattributed != 0 {
+                var dayKeyWeights: [String: Double] = [:]
+                for keyWeights in (weights[day] ?? [:]).values {
+                    for (key, w) in keyWeights { dayKeyWeights[key, default: 0] += w }
+                }
+                let pool = dayKeyWeights.isEmpty ? windowKeyWeights : dayKeyWeights
+                let total = pool.values.reduce(0, +)
+                if total > 0 {
+                    for (key, w) in pool { perKeyDay[key, default: [:]][day, default: 0] += unattributed * w / total }
+                }
+            }
+        }
+        guard !perKeyDay.isEmpty else { return [] }
+
+        // 4) window sums + id → name mapping (merge same-named keys)
+        let today = Day.utcToday(now: now)
+        let monthStart = Day.utcMonthPrefix(now: now) + "-01"
         let names = (try? await fetchKeyNames()) ?? [:]
-        var byName: [String: Double] = [:]
-        for (id, usd) in estimate { byName[names[id] ?? id, default: 0] += usd }
-        return byName.map { KeyTotal(apiKeyID: $0.key, totalUSD: $0.value) }
-            .sorted { $0.totalUSD > $1.totalUSD }
+        var byName: [String: (total: Double, mtd: Double, today: Double)] = [:]
+        for (id, dayMap) in perKeyDay {
+            let name = names[id] ?? id
+            var agg = byName[name] ?? (0, 0, 0)
+            for (day, usd) in dayMap {
+                agg.total += usd
+                if day >= monthStart { agg.mtd += usd }
+                if day == today { agg.today += usd }
+            }
+            byName[name] = agg
+        }
+        return byName.map { KeyTotal(apiKeyID: $0.key, totalUSD: $0.value.total,
+                                     todayUSD: $0.value.today, mtdUSD: $0.value.mtd) }
+            .sorted {
+                if ($0.mtdUSD ?? 0) != ($1.mtdUSD ?? 0) { return ($0.mtdUSD ?? 0) > ($1.mtdUSD ?? 0) }
+                if $0.totalUSD != $1.totalUSD { return $0.totalUSD > $1.totalUSD }
+                return $0.apiKeyID < $1.apiKeyID
+            }
     }
 
     private func fetchKeyNames() async throws -> [String: String] {
