@@ -64,7 +64,7 @@ struct AccountsTab: View {
                 if showPasteField {
                     SecureField("sk-or-v1-…", text: $pastedKey)
                     Button("Save key") { pairing.pasteKeyPairing(displayName: newName, apiKey: pastedKey); pastedKey = "" }
-                        .disabled(pastedKey.isEmpty)
+                        .disabled(pastedKey.isEmpty || pairing.state == .waitingForBrowser || pairing.state == .exchanging)
                 }
                 pairingStatus
             }
