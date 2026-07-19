@@ -28,10 +28,14 @@ extension Data {
 public enum OpenRouterPairing {
     public static let callbackScheme = "llmcostbar"
 
-    public static func authURL(pkce: PKCE) -> URL {
+    /// OpenRouter rejects custom URL scheme callback_urls client-side (it redirects to
+    /// the homepage instead of showing the consent page), so callers must pass a real
+    /// http(s) loopback URL (see LoopbackServer). The llmcostbar:// scheme is kept only
+    /// for `code(fromCallback:)`'s legacy handling.
+    public static func authURL(pkce: PKCE, callbackURL: String) -> URL {
         var c = URLComponents(string: "https://openrouter.ai/auth")!
         c.queryItems = [
-            .init(name: "callback_url", value: "llmcostbar://callback"),
+            .init(name: "callback_url", value: callbackURL),
             .init(name: "code_challenge", value: pkce.challenge),
             .init(name: "code_challenge_method", value: "S256"),
         ]
