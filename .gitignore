@@ -5,3 +5,4 @@ Signing.xcconfig
 *.xcodeproj
 DerivedData/
 Core/.build/
+.firecrawl/
