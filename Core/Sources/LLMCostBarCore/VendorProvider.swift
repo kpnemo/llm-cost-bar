@@ -3,7 +3,7 @@ import Foundation
 public protocol VendorProvider: Sendable {
     var vendorID: String { get }
     func validateCredentials() async throws -> AccountInfo
-    func fetchUsage(sinceDaysAgo: Int) async throws -> [UsageRecord]
+    func fetchUsage(sinceDaysAgo: Int, now: Date) async throws -> [UsageRecord]
     func fetchBalance() async throws -> Balance?      // nil if vendor has no prepaid balance
 }
 
@@ -26,7 +26,7 @@ public func withRetry<T: Sendable>(attempts: Int = 3,
 
 /// Maps an HTTP status + body to the error taxonomy. Snippet is truncated and never includes headers.
 public func classifyHTTP(status: Int, data: Data) -> ProviderError? {
-    let snippet = String(String(data: data, encoding: .utf8) ?? "<binary>").prefix(300)
+    let snippet = (String(data: data, encoding: .utf8) ?? "<binary>").prefix(300)
     switch status {
     case 200...299: return nil
     case 401, 403: return .auth(status, String(snippet))

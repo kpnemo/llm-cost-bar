@@ -39,7 +39,8 @@ final class OpenRouterProviderTests: XCTestCase {
         let http = FakeHTTP()
         http.responses["/activity"] = (activityJSON, 200)
         http.responses["/key"] = (keyJSON, 200)
-        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 35)
+        let fixedNow = ISO8601DateFormatter().date(from: "2026-07-19T12:00:00Z")!
+        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 35, now: fixedNow)
         XCTAssertEqual(records.count, 3)
         let r = records[0]
         XCTAssertEqual(r.vendor, "openrouter")
@@ -75,5 +76,55 @@ final class OpenRouterProviderTests: XCTestCase {
         let http = FakeHTTP(); http.responses["/key"] = (keyJSON, 200)
         let info = try await makeProvider(http).validateCredentials()
         XCTAssertEqual(info.label, "claude-code")
+    }
+}
+
+final class ClassifyHTTPTests: XCTestCase {
+    func testSuccessReturnsNil() {
+        XCTAssertNil(classifyHTTP(status: 200, data: Data()))
+    }
+
+    func testUnauthorizedIsAuth() {
+        guard case .auth(401, _)? = classifyHTTP(status: 401, data: Data()) else {
+            return XCTFail("expected auth")
+        }
+    }
+
+    func testForbiddenIsAuth() {
+        guard case .auth(403, _)? = classifyHTTP(status: 403, data: Data()) else {
+            return XCTFail("expected auth")
+        }
+    }
+
+    func testTooManyRequestsIsTransient() {
+        guard case .transient? = classifyHTTP(status: 429, data: Data()) else {
+            return XCTFail("expected transient")
+        }
+    }
+
+    func testServerErrorIsTransient() {
+        guard case .transient? = classifyHTTP(status: 500, data: Data()) else {
+            return XCTFail("expected transient")
+        }
+    }
+
+    func testServiceUnavailableIsTransient() {
+        guard case .transient? = classifyHTTP(status: 503, data: Data()) else {
+            return XCTFail("expected transient")
+        }
+    }
+
+    func testTeapotIsHTTP() {
+        guard case .http(418, _)? = classifyHTTP(status: 418, data: Data()) else {
+            return XCTFail("expected http")
+        }
+    }
+
+    func testSnippetIsTruncatedTo300Chars() {
+        let body = String(repeating: "x", count: 400)
+        guard case .http(418, let snippet)? = classifyHTTP(status: 418, data: Data(body.utf8)) else {
+            return XCTFail("expected http")
+        }
+        XCTAssertLessThanOrEqual(snippet.count, 310)
     }
 }

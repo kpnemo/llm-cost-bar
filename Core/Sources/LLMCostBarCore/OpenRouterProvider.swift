@@ -42,7 +42,7 @@ public struct OpenRouterProvider: VendorProvider {
         if let err = classifyHTTP(status: status, data: data) { throw err }
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch {
-            let snippet = String(String(data: data, encoding: .utf8) ?? "<binary>").prefix(300)
+            let snippet = (String(data: data, encoding: .utf8) ?? "<binary>").prefix(300)
             throw ProviderError.decode("decoding \(path): \(error) — body: \(snippet)")
         }
     }
@@ -57,11 +57,11 @@ public struct OpenRouterProvider: VendorProvider {
         return Balance(balanceUSD: resp.data.total_credits - resp.data.total_usage)
     }
 
-    public func fetchUsage(sinceDaysAgo: Int) async throws -> [UsageRecord] {
+    public func fetchUsage(sinceDaysAgo: Int, now: Date = Date()) async throws -> [UsageRecord] {
         // /activity returns the whole recent window; sinceDaysAgo filters client-side.
         let keyLabel = (try? await validateCredentials().label) ?? "default"
         let resp = try await getJSON("activity", as: ActivityResp.self)
-        let cutoff = Day.utcToday(now: Date(timeIntervalSinceNow: -Double(sinceDaysAgo) * 86400))
+        let cutoff = Day.utcToday(now: now.addingTimeInterval(-Double(sinceDaysAgo) * 86400))
         return resp.data.filter { $0.date >= cutoff }.map { row in
             UsageRecord(vendor: vendorID, accountID: accountID, apiKeyID: keyLabel,
                         model: row.model, day: row.date,
