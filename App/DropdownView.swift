@@ -11,9 +11,11 @@ struct DropdownView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Today \(usd(model.summary.todayUSD))").font(.headline)
+                Text("Today \(usd(model.summary.todayUSD))")
+                    .font(.title2.weight(.semibold))
                 Spacer()
-                Text("MTD \(usd(model.summary.monthUSD))").foregroundStyle(.secondary)
+                Text("MTD \(usd(model.summary.monthUSD))")
+                    .font(.title3).foregroundStyle(.secondary)
             }
 
             ForEach(model.vendors, id: \.vendor) { v in
@@ -29,7 +31,7 @@ struct DropdownView: View {
 
             if model.vendors.isEmpty {
                 Text("No accounts connected — open Settings to pair OpenRouter.")
-                    .foregroundStyle(.secondary).font(.callout)
+                    .foregroundStyle(.secondary).font(.body)
             }
 
             Divider()
@@ -39,10 +41,10 @@ struct DropdownView: View {
                 Spacer()
                 syncStatus
             }
-            .font(.callout)
+            .font(.body)
         }
-        .padding(14)
-        .frame(width: 320)
+        .padding(16)
+        .frame(width: 380)
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.pairing = pairing
             model.refresh()
@@ -89,22 +91,22 @@ struct VendorCard: View {
             // Header row is the collapse toggle — always visible.
             HStack {
                 Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.caption).foregroundStyle(.tertiary)
                 if let icon = Self.vendorIcon(vendor.vendor) {
                     Image(nsImage: icon)
                         .resizable().interpolation(.high)
-                        .frame(width: 16, height: 16)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
-                Text(vendorDisplayName).bold()
+                Text(vendorDisplayName).font(.title3).bold()
                 if isCollapsed {
                     Text("today \(usd(vendor.todayUSD))")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 0) {
-                    Text(usd(vendor.monthUSD)).bold()
-                    Text("this month").font(.caption2).foregroundStyle(.tertiary)
+                    Text(usd(vendor.monthUSD)).font(.title3).bold()
+                    Text("this month").font(.caption).foregroundStyle(.tertiary)
                 }
             }
             .contentShape(Rectangle())
@@ -114,7 +116,7 @@ struct VendorCard: View {
                 expandedContent
             }
         }
-        .padding(10)
+        .padding(12)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 
@@ -122,10 +124,10 @@ struct VendorCard: View {
         VStack(alignment: .leading, spacing: 4) {
             if let day = hoverDay, let point = filledSeries.first(where: { $0.day == day }) {
                 Text("\(prettyDay(day)) · \(usd(point.costUSD))")
-                    .font(.caption).foregroundStyle(.primary)
+                    .font(.subheadline).foregroundStyle(.primary)
             } else {
                 Text("today \(usd(vendor.todayUSD))")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.subheadline).foregroundStyle(.secondary)
             }
 
             if !series.isEmpty {
@@ -139,7 +141,7 @@ struct VendorCard: View {
                 .chartYAxis {
                     AxisMarks(values: .automatic(desiredCount: 3)) { _ in
                         AxisGridLine()
-                        AxisValueLabel().font(.system(size: 7))
+                        AxisValueLabel().font(.system(size: 10))
                     }
                 }
                 .chartOverlay { proxy in
@@ -161,7 +163,7 @@ struct VendorCard: View {
                             }
                     }
                 }
-                .frame(height: 56)
+                .frame(height: 72)
                 .padding(.vertical, 2)
             }
 
@@ -173,19 +175,19 @@ struct VendorCard: View {
                         Spacer()
                         Text("\(Int(fraction * 100))% used")
                     }
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.subheadline).foregroundStyle(.secondary)
                     ProgressView(value: fraction)
                         .tint(fraction < 0.7 ? .green : (fraction < 0.9 ? .orange : .red))
                         .controlSize(.small)
                 }
                 .padding(.vertical, 2)
             } else if let b = vendor.balanceUSD {
-                Text("balance \(usd(b))").font(.caption).foregroundStyle(.secondary)
+                Text("balance \(usd(b))").font(.subheadline).foregroundStyle(.secondary)
             }
 
             if account?.needsReauth == true {
                 Label("reconnect needed — open Settings", systemImage: "key.slash")
-                    .font(.caption).foregroundStyle(.red)
+                    .font(.subheadline).foregroundStyle(.red)
             }
 
             // KeySpend is Hashable (accountID + apiKeyID + todayUSD); apiKeyID alone
@@ -198,13 +200,13 @@ struct VendorCard: View {
                 Text(vendor.vendor == "anthropic" ? "API keys · 30-day est. spend"
                      : vendor.vendor == "openai" ? "API keys · 30-day spend"
                      : "API keys · total spend")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.caption).foregroundStyle(.tertiary)
             }
             ForEach(vendor.topKeys, id: \.self) { k in
                 HStack {
-                    Text(k.apiKeyID).font(.caption)
+                    Text(k.apiKeyID).font(.subheadline)
                     Spacer()
-                    Text(usd(k.totalUSD)).font(.caption)
+                    Text(usd(k.totalUSD)).font(.subheadline)
                 }
                 .foregroundStyle(.secondary)
             }
