@@ -237,4 +237,44 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(v[0].topKeys.count, 1, "stale key_totals from the removed account must be gone")
         XCTAssertEqual(v[0].topKeys[0].totalUSD, 4.0, accuracy: 0.001)
     }
+
+    func testKeyTotalWindowsRoundTripAndMTDOrdering() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q)
+        let store = UsageStore(db: q)
+        try store.upsertKeyTotals(vendor: "anthropic", accountID: "a", totals: [
+            KeyTotal(apiKeyID: "small-total-big-mtd", totalUSD: 5, todayUSD: 1, mtdUSD: 4),
+            KeyTotal(apiKeyID: "big-total-small-mtd", totalUSD: 9, todayUSD: 0, mtdUSD: 2),
+        ])
+        // OpenRouter-style: no windows → NULLs round-trip as nil
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
+            KeyTotal(apiKeyID: "or-key", totalUSD: 7),
+        ])
+        let vendors = try store.vendorSummaries(today: "2026-07-20", monthPrefix: "2026-07")
+        let anth = vendors.first { $0.vendor == "anthropic" }!.topKeys
+        XCTAssertEqual(anth.map(\.apiKeyID), ["small-total-big-mtd", "big-total-small-mtd"],
+                       "ordering must be by MTD desc, not total")
+        XCTAssertEqual(anth[0].todayUSD, 1); XCTAssertEqual(anth[0].mtdUSD, 4)
+        XCTAssertEqual(anth[1].todayUSD, 0)
+        XCTAssertEqual(anth[1].mtdUSD, 2)
+        let or = vendors.first { $0.vendor == "openrouter" }!.topKeys
+        XCTAssertNil(or[0].todayUSD); XCTAssertNil(or[0].mtdUSD)
+        XCTAssertEqual(or[0].totalUSD, 7)
+    }
+
+    func testV5MigrationPreservesExistingKeyTotals() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q, upTo: "v4-usage-snapshots")
+        try q.write { db in
+            try db.execute(sql: """
+                INSERT INTO key_totals (vendor, account_id, api_key_id, total_usd, fetched_at)
+                VALUES ('openrouter','a','k',5.0,'2026-07-19T00:00:00Z')
+                """)
+        }
+        try Database.migrator.migrate(q)
+        let row = try q.read { try Row.fetchOne($0, sql: "SELECT * FROM key_totals")! }
+        XCTAssertEqual(row["total_usd"] as Double, 5.0)
+        XCTAssertNil(row["today_usd"] as Double?)
+        XCTAssertNil(row["mtd_usd"] as Double?)
+    }
 }

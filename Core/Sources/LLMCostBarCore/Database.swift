@@ -71,6 +71,12 @@ public enum Database {
             );
             """)
         }
+        m.registerMigration("v5-key-daily") { db in
+            try db.execute(sql: """
+            ALTER TABLE key_totals ADD COLUMN today_usd REAL;
+            ALTER TABLE key_totals ADD COLUMN mtd_usd REAL;
+            """)
+        }
         return m
     }
 }

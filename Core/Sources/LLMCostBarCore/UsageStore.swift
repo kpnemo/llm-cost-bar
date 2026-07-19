@@ -10,7 +10,9 @@ public struct Summary: Equatable, Sendable {
 public struct KeySpend: Equatable, Hashable, Sendable {
     public var accountID: String
     public var apiKeyID: String
-    public var totalUSD: Double   // lifetime spend from the vendor's key API
+    public var totalUSD: Double   // 30-day (Anthropic/OpenAI) or lifetime (OpenRouter)
+    public var todayUSD: Double?  // nil when the vendor has no per-day key data
+    public var mtdUSD: Double?
 }
 
 public struct VendorSummary: Equatable, Sendable {
@@ -100,9 +102,10 @@ public final class UsageStore: Sendable {
                            arguments: [vendor, accountID])
             for t in totals {
                 try db.execute(sql: """
-                    INSERT OR REPLACE INTO key_totals (vendor, account_id, api_key_id, total_usd, fetched_at)
-                    VALUES (?,?,?,?,?)
-                    """, arguments: [vendor, accountID, t.apiKeyID, t.totalUSD,
+                    INSERT OR REPLACE INTO key_totals
+                    (vendor, account_id, api_key_id, total_usd, today_usd, mtd_usd, fetched_at)
+                    VALUES (?,?,?,?,?,?,?)
+                    """, arguments: [vendor, accountID, t.apiKeyID, t.totalUSD, t.todayUSD, t.mtdUSD,
                                      ISO8601DateFormatter().string(from: now)])
             }
         }
@@ -191,11 +194,16 @@ public final class UsageStore: Sendable {
 
     public func vendorSummaries(today: String, monthPrefix: String) throws -> [VendorSummary] {
         try db.read { db in
-            // UNION with usage_daily so spend whose accounts row is gone (e.g. a
-            // mid-poll remove re-created rows) still shows instead of silently
+            // UNION with usage_daily and key_totals so spend whose accounts row is
+            // gone (e.g. a mid-poll remove re-created rows) — or whose only data so
+            // far is a key_totals snapshot — still shows instead of silently
             // vanishing from Today/MTD.
             let vendors = try String.fetchAll(db, sql: """
-                SELECT vendor FROM (SELECT vendor FROM accounts UNION SELECT vendor FROM usage_daily) ORDER BY vendor
+                SELECT vendor FROM (
+                    SELECT vendor FROM accounts
+                    UNION SELECT vendor FROM usage_daily
+                    UNION SELECT vendor FROM key_totals
+                ) ORDER BY vendor
                 """)
             return try vendors.map { vendor in
                 // Today = per-ACCOUNT max(activity, live delta), summed. A max over
@@ -224,10 +232,12 @@ public final class UsageStore: Sendable {
                 let credTotal: Double? = balRow?["tc"]
                 let credUsed: Double? = balRow?["tu"]
                 let keys = try Row.fetchAll(db, sql: """
-                    SELECT account_id, api_key_id, total_usd FROM key_totals
-                    WHERE vendor = ? AND total_usd > 0 ORDER BY total_usd DESC LIMIT 5
+                    SELECT account_id, api_key_id, total_usd, today_usd, mtd_usd FROM key_totals
+                    WHERE vendor = ? AND total_usd > 0
+                    ORDER BY COALESCE(mtd_usd, total_usd) DESC LIMIT 5
                     """, arguments: [vendor])
-                    .map { KeySpend(accountID: $0["account_id"], apiKeyID: $0["api_key_id"], totalUSD: $0["total_usd"]) }
+                    .map { KeySpend(accountID: $0["account_id"], apiKeyID: $0["api_key_id"],
+                                    totalUSD: $0["total_usd"], todayUSD: $0["today_usd"], mtdUSD: $0["mtd_usd"]) }
                 return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, balanceUSD: bal,
                                      creditsTotalUSD: credTotal, creditsUsedUSD: credUsed, topKeys: keys)
             }
