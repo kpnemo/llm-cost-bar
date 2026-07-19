@@ -75,6 +75,12 @@ Computed like MTD, so the header/menu-bar number is live-corrected:
 - **OpenAI** (`fetchKeyTotals`): same reshaping with real dollars — the costs
   endpoint already returns daily buckets grouped by `api_key_id`; keep the
   per-day values, compute the three sums. Key-id → name mapping unchanged.
+- Both providers fetch a ~31-day bucket range (today through today−30) so
+  per-day allocation always has a full trailing day to look back on, but the
+  shared `KeyTotal.aggregate` helper clips `totalUSD` to the same trailing
+  30-day window as the vendor header (`Day.last30Start`, today−29 through
+  today) before summing — otherwise a key's 30d cell could carry one more
+  day of cost than the header total above it and systematically exceed it.
 - **OpenRouter**: unchanged; `todayUSD`/`mtdUSD` = nil.
 - UTC day boundaries throughout, matching the rest of the app (`Day.utcToday`).
 

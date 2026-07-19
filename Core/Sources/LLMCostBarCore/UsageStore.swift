@@ -244,7 +244,7 @@ public final class UsageStore: Sendable {
                 let keys = try Row.fetchAll(db, sql: """
                     SELECT account_id, api_key_id, total_usd, today_usd, mtd_usd FROM key_totals
                     WHERE vendor = ? AND total_usd > 0
-                    ORDER BY COALESCE(mtd_usd, total_usd) DESC LIMIT 5
+                    ORDER BY COALESCE(mtd_usd, total_usd) DESC, total_usd DESC, api_key_id ASC LIMIT 5
                     """, arguments: [vendor])
                     .map { KeySpend(accountID: $0["account_id"], apiKeyID: $0["api_key_id"],
                                     totalUSD: $0["total_usd"], todayUSD: $0["today_usd"], mtdUSD: $0["mtd_usd"]) }

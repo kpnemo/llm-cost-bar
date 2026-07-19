@@ -36,16 +36,25 @@ extension KeyTotal {
     /// Collapse per-key per-day dollars into window sums (total / MTD / today),
     /// merging distinct key ids that share a display name into one row, sorted
     /// MTD desc, then total desc, then name asc (deterministic across refreshes).
+    /// Only totalUSD is clipped to the trailing-30-day window as the vendor
+    /// header (Day.last30Start) — providers fetch ~31 days of buckets (today
+    /// through today−30) so a key's 30d cell can't systematically exceed the
+    /// header total above it, which only ever sums the header's 30-day window.
+    /// mtdUSD/todayUSD are NOT clipped to windowStart: on the 31st of a 31-day
+    /// month, windowStart falls after the 1st, so clipping there would drop
+    /// day-1 spend from MTD while the header's MTD still includes it — mtd is
+    /// naturally bounded anyway (at most 31 days, exactly what's fetched).
     static func aggregate(perKeyDay: [String: [String: Double]],
                           names: [String: String], now: Date) -> [KeyTotal] {
         let today = Day.utcToday(now: now)
         let monthStart = Day.utcMonthPrefix(now: now) + "-01"
+        let windowStart = Day.last30Start(now: now)
         var byName: [String: (total: Double, mtd: Double, today: Double)] = [:]
         for (id, dayMap) in perKeyDay {
             let name = names[id] ?? id
             var agg = byName[name] ?? (0, 0, 0)
             for (day, usd) in dayMap {
-                agg.total += usd
+                if day >= windowStart { agg.total += usd }
                 if day >= monthStart { agg.mtd += usd }
                 if day == today { agg.today += usd }
             }

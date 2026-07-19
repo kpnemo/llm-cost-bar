@@ -134,7 +134,9 @@ public struct AnthropicProvider: VendorProvider {
     /// Cost with no same-day usage attribution for its model is split by that
     /// day's overall weights — or the whole window's weights when the day has
     /// no usage rows at all — so the per-key estimates sum to the
-    /// vendor-reported total. Sole exception: cost on a day when the entire
+    /// vendor-reported total, EXCEPT: KeyTotal.aggregate clips totalUSD to the
+    /// header's trailing 30-day window (Day.last30Start), which excludes the
+    /// oldest of the ~31 fetched days, and cost on a day when the entire
     /// window has zero usage weight is dropped (matches the returns-empty
     /// contract when there is no usage at all).
     public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
