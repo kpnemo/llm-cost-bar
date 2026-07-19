@@ -11,7 +11,7 @@ final class PairingController: ObservableObject {
     var pendingDisplayName: String = ""
     /// Only meaningful while `state == .waitingForBrowser`/`.exchanging` for a browser
     /// flow started with a reconnect target. Never read directly by finishPairing —
-    /// handleCallback captures it into a local before the flow proceeds, and
+    /// completePairing captures it into a local before the flow proceeds, and
     /// pasteKeyPairing always finalizes with an explicit `nil` regardless of this
     /// value, so a stray/abandoned browser flow can never leak its target into a
     /// paste-key finalization.
@@ -24,29 +24,53 @@ final class PairingController: ObservableObject {
 
     private let keychain = KeychainStore()
     private let paths = AppPaths.resolve()
+    /// OpenRouter rejects custom URL-scheme callback_urls client-side (redirects to the
+    /// homepage instead of the consent page), so pairing redirects to a real http
+    /// loopback address instead of llmcostbar://. One server per in-flight browser flow.
+    private var loopbackServer: LoopbackServer?
 
-    /// Step 1 of the flow: open the browser at the OpenRouter consent page.
+    /// Step 1 of the flow: start a local loopback callback listener and open the browser
+    /// at the OpenRouter consent page pointed at it.
     /// Pass reconnectAccountID to re-key an existing account instead of creating a new one.
     /// Starting a new flow always discards any prior (abandoned) flow's pending state.
     func startBrowserPairing(displayName: String, reconnectAccountID: String? = nil) {
         let pkce = PKCE.generate()
+        let server = LoopbackServer()
+        do {
+            try server.start { [weak self] code in
+                Task { @MainActor in self?.completePairing(code: code) }
+            }
+        } catch {
+            state = .failed("could not start local callback server: \(error)")
+            return
+        }
+
+        loopbackServer = server
         pendingVerifier = pkce.verifier
         pendingDisplayName = displayName
         self.reconnectAccountID = reconnectAccountID
         state = .waitingForBrowser
-        NSWorkspace.shared.open(OpenRouterPairing.authURL(pkce: pkce))
+        NSWorkspace.shared.open(OpenRouterPairing.authURL(pkce: pkce, callbackURL: server.callbackURL))
     }
 
-    /// Step 2: browser redirected to llmcostbar://callback?code=… (routed via AppDelegate).
-    /// Re-entrancy/stray-callback guard: only a flow actively waiting for the browser
-    /// may be completed here. A duplicate delivery, or a callback arriving after the
-    /// flow already moved on (exchanging/done/failed/idle), is silently ignored rather
-    /// than surfacing a confusing error banner.
+    /// Legacy path: llmcostbar://callback URL scheme, still routed via AppDelegate in
+    /// case a stale build/bookmark ever delivers one. Funnels into the same completion
+    /// logic as the loopback server's callback.
     func handleCallback(url: URL) {
         guard state == .waitingForBrowser else { return }
-        guard let code = OpenRouterPairing.code(fromCallback: url), let verifier = pendingVerifier else {
+        guard let code = OpenRouterPairing.code(fromCallback: url) else {
             state = .failed("callback missing code"); return
         }
+        completePairing(code: code)
+    }
+
+    /// Shared completion path for both the loopback server and the legacy URL scheme.
+    /// Re-entrancy/stray-callback guard: only a flow actively waiting for the browser
+    /// may be completed here. A duplicate delivery, or a callback arriving after the
+    /// flow already moved on (exchanging/done/failed/idle/cancelled), is silently
+    /// ignored rather than surfacing a confusing error banner.
+    private func completePairing(code: String) {
+        guard state == .waitingForBrowser, let verifier = pendingVerifier else { return }
         // Capture and clear synchronously (before the `await` suspension point) so a
         // second callback delivered while this one is in flight fails the state guard
         // above instead of racing this flow's verifier/reconnect target.
@@ -54,6 +78,8 @@ final class PairingController: ObservableObject {
         let reconnectID = reconnectAccountID
         pendingVerifier = nil
         reconnectAccountID = nil
+        loopbackServer?.stop()
+        loopbackServer = nil
         state = .exchanging
         Task {
             do {
@@ -67,11 +93,13 @@ final class PairingController: ObservableObject {
 
     /// Escape hatch: user gives up waiting for the browser (e.g. closed the tab, or
     /// changed their mind). Discards the abandoned flow's pending state so a callback
-    /// that arrives later fails the `.waitingForBrowser` guard in handleCallback and is
+    /// that arrives later fails the `.waitingForBrowser` guard in completePairing and is
     /// ignored, and returns the Add-account UI to idle.
     func cancelPairing() {
         pendingVerifier = nil
         reconnectAccountID = nil
+        loopbackServer?.stop()
+        loopbackServer = nil
         state = .idle
     }
 

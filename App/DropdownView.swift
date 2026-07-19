@@ -25,7 +25,7 @@ struct DropdownView: View {
 
             Divider()
             HStack {
-                Button("Settings…") { openSettings() }
+                Button("Settings…") { openSettings(); NSApp.activate(ignoringOtherApps: true) }
                 Spacer()
                 syncStatus
             }

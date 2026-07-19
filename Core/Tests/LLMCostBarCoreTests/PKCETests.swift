@@ -16,11 +16,11 @@ final class PKCETests: XCTestCase {
 
     func testAuthURLContainsCallbackAndChallenge() {
         let pkce = PKCE(verifier: "v", challenge: "c")
-        let url = OpenRouterPairing.authURL(pkce: pkce)
+        let url = OpenRouterPairing.authURL(pkce: pkce, callbackURL: "http://localhost:18923/callback")
         let s = url.absoluteString
         XCTAssertTrue(s.hasPrefix("https://openrouter.ai/auth?"))
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        XCTAssertEqual(comps.queryItems?.first(where: { $0.name == "callback_url" })?.value, "llmcostbar://callback")
+        XCTAssertEqual(comps.queryItems?.first(where: { $0.name == "callback_url" })?.value, "http://localhost:18923/callback")
         XCTAssertTrue(s.contains("code_challenge=c"))
         XCTAssertTrue(s.contains("code_challenge_method=S256"))
     }

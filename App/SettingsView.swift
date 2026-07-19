@@ -18,6 +18,7 @@ struct SettingsView: View {
             (NSApp.delegate as? AppDelegate)?.pairing = pairing
             pairing.store = model.store
             pairing.onPaired = { model.refresh() }
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 }
@@ -76,8 +77,10 @@ struct AccountsTab: View {
         switch pairing.state {
         case .idle: EmptyView()
         case .waitingForBrowser:
-            HStack {
-                Label("Waiting for browser approval…", systemImage: "safari")
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Approve access in your browser", systemImage: "safari")
+                Text("Sign in to openrouter.ai if needed, then click Authorize. You'll be brought back here automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Button("Cancel") { pairing.cancelPairing() }
             }
         case .exchanging: Label("Exchanging code…", systemImage: "arrow.triangle.2.circlepath")
