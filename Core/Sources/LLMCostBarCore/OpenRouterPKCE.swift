@@ -8,7 +8,8 @@ public struct PKCE: Sendable {
 
     public static func generate() -> PKCE {
         var bytes = [UInt8](repeating: 0, count: 48)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
         let verifier = Data(bytes).base64URLEncoded()
         let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded()
         return PKCE(verifier: verifier, challenge: challenge)
@@ -38,7 +39,8 @@ public enum OpenRouterPairing {
     }
 
     public static func code(fromCallback url: URL) -> String? {
-        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        guard url.scheme == callbackScheme, url.host == "callback" else { return nil }
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "code" })?.value
     }
 

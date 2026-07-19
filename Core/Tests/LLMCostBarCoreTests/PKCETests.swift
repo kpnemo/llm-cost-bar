@@ -29,6 +29,8 @@ final class PKCETests: XCTestCase {
         let url = URL(string: "llmcostbar://callback?code=abc123")!
         XCTAssertEqual(OpenRouterPairing.code(fromCallback: url), "abc123")
         XCTAssertNil(OpenRouterPairing.code(fromCallback: URL(string: "llmcostbar://callback")!))
+        XCTAssertNil(OpenRouterPairing.code(fromCallback: URL(string: "https://callback?code=abc123")!))
+        XCTAssertNil(OpenRouterPairing.code(fromCallback: URL(string: "llmcostbar://other?code=abc123")!))
     }
 
     func testExchangeParsesKey() async throws {
