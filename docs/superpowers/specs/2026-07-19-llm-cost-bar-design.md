@@ -14,6 +14,7 @@ A macOS menu bar app that aggregates LLM API usage and cost across vendors (Open
 - Alerts (post-MVP): daily/monthly budget thresholds, spike detection vs. recent average, low prepaid balance — delivered as macOS notifications.
 - Dead-simple pairing UX: click "Add account" → browser opens → approve → done.
 - Errors are always visible and debuggable, never silent.
+- Open source under MIT: shareable repo with LICENSE, README, architecture docs, and an agent guide (CLAUDE.md) — "AI-ready" for contributors using coding agents.
 
 ## Non-Goals
 
