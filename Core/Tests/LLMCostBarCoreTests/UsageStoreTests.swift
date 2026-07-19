@@ -49,7 +49,7 @@ final class UsageStoreTests: XCTestCase {
                         model: "anthropic/claude-sonnet-4", day: "2026-07-19",
                         requests: 12, tokensIn: 1200, tokensOut: 600, costUSD: 2.10),
         ])
-        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(s.todayUSD, 2.80, accuracy: 0.001)       // 2.10 + 0.70
         XCTAssertEqual(s.monthUSD, 61.90, accuracy: 0.001)      // + 59.10
     }
@@ -57,7 +57,7 @@ final class UsageStoreTests: XCTestCase {
     func testVendorSummaryWithTopKeys() throws {
         let store = UsageStore(db: try makeDB())
         try seed(store)
-        let vendors = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        let vendors = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(vendors.count, 1)
         let v = vendors[0]
         XCTAssertEqual(v.vendor, "openrouter")
@@ -86,15 +86,17 @@ final class UsageStoreTests: XCTestCase {
                                       day: "2026-07-19", totalUsageUSD: 70.0)
         try store.upsertBalance(vendor: "openrouter", accountID: "acc1",
                                 balance: Balance(balanceUSD: 7.5, totalCreditsUSD: 80, totalUsageUSD: 72.5))
-        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(s.todayUSD, 2.5, accuracy: 0.001)          // live delta, not 0
         XCTAssertEqual(s.monthUSD, 5.5, accuracy: 0.001)          // 3.00 (yesterday) + 2.5, no double count
-        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")[0]
+        XCTAssertEqual(s.last30USD, 5.5, accuracy: 0.001)         // same live-corrected t flows into last30
+        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")[0]
         XCTAssertEqual(v.todayUSD, 2.5, accuracy: 0.001)
+        XCTAssertEqual(v.last30USD, 5.5, accuracy: 0.001)         // 3.00 (2026-07-18, inside window) + 2.5 live delta
         // Baseline is INSERT OR IGNORE — a later sync must not move it.
         try store.recordDailyBaseline(vendor: "openrouter", accountID: "acc1",
                                       day: "2026-07-19", totalUsageUSD: 99.0)
-        XCTAssertEqual(try store.summary(today: "2026-07-19", monthPrefix: "2026-07").todayUSD, 2.5, accuracy: 0.001)
+        XCTAssertEqual(try store.summary(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20").todayUSD, 2.5, accuracy: 0.001)
     }
 
     func testSyncLogRoundTrip() throws {
@@ -119,10 +121,10 @@ final class UsageStoreTests: XCTestCase {
         try seed(store)
         try store.removeAccount(id: "acc1")
         XCTAssertTrue(try store.accounts().isEmpty)
-        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(s.todayUSD, 0, accuracy: 0.001)
         XCTAssertEqual(s.monthUSD, 0, accuracy: 0.001)
-        XCTAssertTrue(try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07").isEmpty)
+        XCTAssertTrue(try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20").isEmpty)
     }
 
     func testMarkSyncOKClearsNeedsReauth() throws {
@@ -156,8 +158,8 @@ final class UsageStoreTests: XCTestCase {
         // Anthropic: nothing at all today.
         try store.addAccount(id: "acc-ant", vendor: "anthropic", displayName: "ant")
 
-        let summary = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
-        let vendors = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        let summary = try store.summary(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
+        let vendors = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(vendors.count, 3)
         let cardsToday = vendors.reduce(0) { $0 + $1.todayUSD }
         let cardsMonth = vendors.reduce(0) { $0 + $1.monthUSD }
@@ -182,11 +184,11 @@ final class UsageStoreTests: XCTestCase {
             UsageRecord(vendor: "openai", accountID: "a2", apiKeyID: "k", model: "m",
                         day: "2026-07-01", requests: 1, tokensIn: 1, tokensOut: 1, costUSD: 10.0),
         ])
-        let vendors = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        let vendors = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(Set(vendors.map(\.vendor)), ["openrouter", "openai"])
         XCTAssertEqual(vendors.first { $0.vendor == "openrouter" }?.todayUSD ?? 0, 1.0, accuracy: 0.001)
         XCTAssertEqual(vendors.first { $0.vendor == "openai" }?.monthUSD ?? 0, 12.0, accuracy: 0.001)
-        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(s.todayUSD, 3.0, accuracy: 0.001)
         XCTAssertEqual(s.monthUSD, 13.0, accuracy: 0.001)
     }
@@ -210,11 +212,11 @@ final class UsageStoreTests: XCTestCase {
         try store.upsertBalance(vendor: "openrouter", accountID: "a2",
                                 balance: Balance(balanceUSD: 0, totalCreditsUSD: nil, totalUsageUSD: 53))
 
-        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(v.count, 1)
         // max(5,2) + max(0,3) = 8; a vendor-pooled max(5+0, 2+3) would say 5.
         XCTAssertEqual(v[0].todayUSD, 8.0, accuracy: 0.001)
-        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(s.todayUSD, 8.0, accuracy: 0.001)
     }
 
@@ -232,7 +234,7 @@ final class UsageStoreTests: XCTestCase {
         try store.addAccount(id: "a2", vendor: "openai", displayName: "two")
         try store.upsertKeyTotals(vendor: "openai", accountID: "a2",
                                   totals: [KeyTotal(apiKeyID: "prod", totalUSD: 4)])
-        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07", last30Start: "2026-06-20")
         XCTAssertEqual(v.count, 1)
         XCTAssertEqual(v[0].topKeys.count, 1, "stale key_totals from the removed account must be gone")
         XCTAssertEqual(v[0].topKeys[0].totalUSD, 4.0, accuracy: 0.001)
@@ -250,7 +252,7 @@ final class UsageStoreTests: XCTestCase {
         try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
             KeyTotal(apiKeyID: "or-key", totalUSD: 7),
         ])
-        let vendors = try store.vendorSummaries(today: "2026-07-20", monthPrefix: "2026-07")
+        let vendors = try store.vendorSummaries(today: "2026-07-20", monthPrefix: "2026-07", last30Start: "2026-06-21")
         let anth = vendors.first { $0.vendor == "anthropic" }!.topKeys
         XCTAssertEqual(anth.map(\.apiKeyID), ["small-total-big-mtd", "big-total-small-mtd"],
                        "ordering must be by MTD desc, not total")
@@ -260,6 +262,35 @@ final class UsageStoreTests: XCTestCase {
         let or = vendors.first { $0.vendor == "openrouter" }!.topKeys
         XCTAssertNil(or[0].todayUSD); XCTAssertNil(or[0].mtdUSD)
         XCTAssertEqual(or[0].totalUSD, 7)
+    }
+
+    /// last30USD must be live-corrected the same way today/MTD are: a window sum
+    /// over [last30Start, today) that EXCLUDES today's rows, plus the same `t`
+    /// (max(activityToday, liveDelta)) added back in — so today's spend is never
+    /// double-counted (once from the window sum, once from live correction) nor
+    /// dropped (if today's activity feed lags and only the live delta knows about it).
+    func testLast30SumIsLiveCorrectedAndWindowed() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q)
+        let store = UsageStore(db: q)
+        try store.upsertUsage([
+            // inside window (== last30Start, inclusive)
+            UsageRecord(vendor: "openrouter", accountID: "a", apiKeyID: "k", model: "m",
+                        day: "2026-06-21", requests: 0, tokensIn: 0, tokensOut: 0, costUSD: 3),
+            // outside window (day before last30Start)
+            UsageRecord(vendor: "openrouter", accountID: "a", apiKeyID: "k", model: "m",
+                        day: "2026-06-20", requests: 0, tokensIn: 0, tokensOut: 0, costUSD: 100),
+            // today — must NOT be double counted: excluded from the SUM, added via todayUSD
+            UsageRecord(vendor: "openrouter", accountID: "a", apiKeyID: "k", model: "m",
+                        day: "2026-07-20", requests: 0, tokensIn: 0, tokensOut: 0, costUSD: 2),
+        ])
+        let vendors = try store.vendorSummaries(today: "2026-07-20", monthPrefix: "2026-07",
+                                                last30Start: "2026-06-21")
+        let v = vendors.first { $0.vendor == "openrouter" }!
+        XCTAssertEqual(v.todayUSD, 2, accuracy: 0.001)
+        XCTAssertEqual(v.last30USD, 5, accuracy: 0.001)   // 3 (window) + 2 (today)
+        let s = try store.summary(today: "2026-07-20", monthPrefix: "2026-07", last30Start: "2026-06-21")
+        XCTAssertEqual(s.last30USD, 5, accuracy: 0.001)
     }
 
     func testV5MigrationPreservesExistingKeyTotals() throws {

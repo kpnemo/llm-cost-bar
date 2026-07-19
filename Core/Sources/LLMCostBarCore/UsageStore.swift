@@ -4,7 +4,10 @@ import GRDB
 public struct Summary: Equatable, Sendable {
     public var todayUSD: Double
     public var monthUSD: Double
-    public init(todayUSD: Double, monthUSD: Double) { self.todayUSD = todayUSD; self.monthUSD = monthUSD }
+    public var last30USD: Double
+    public init(todayUSD: Double, monthUSD: Double, last30USD: Double) {
+        self.todayUSD = todayUSD; self.monthUSD = monthUSD; self.last30USD = last30USD
+    }
 }
 
 public struct KeySpend: Equatable, Hashable, Sendable {
@@ -19,6 +22,7 @@ public struct VendorSummary: Equatable, Sendable {
     public var vendor: String
     public var todayUSD: Double
     public var monthUSD: Double
+    public var last30USD: Double
     public var balanceUSD: Double?
     public var creditsTotalUSD: Double?
     public var creditsUsedUSD: Double?
@@ -171,15 +175,16 @@ public final class UsageStore: Sendable {
 
     // MARK: reads (app)
 
-    public func summary(today: String, monthPrefix: String) throws -> Summary {
+    public func summary(today: String, monthPrefix: String, last30Start: String) throws -> Summary {
         // Today must equal the sum of the per-vendor cards. Each card takes
         // max(activityToday, liveDelta) for ITS vendor; taking a single max over
         // the pooled sums under-counts whenever one vendor's feed lags (live delta
         // wins) while another's is current (activity wins). So compute per-vendor
         // and sum, rather than a parallel pooled query.
-        let vendors = try vendorSummaries(today: today, monthPrefix: monthPrefix)
+        let vendors = try vendorSummaries(today: today, monthPrefix: monthPrefix, last30Start: last30Start)
         return Summary(todayUSD: vendors.reduce(0) { $0 + $1.todayUSD },
-                       monthUSD: vendors.reduce(0) { $0 + $1.monthUSD })
+                       monthUSD: vendors.reduce(0) { $0 + $1.monthUSD },
+                       last30USD: vendors.reduce(0) { $0 + $1.last30USD })
     }
 
     /// One account's (current lifetime usage − today's first-sync baseline), clamped ≥ 0.
@@ -192,7 +197,8 @@ public final class UsageStore: Sendable {
             """, arguments: [today, vendor, accountID]) ?? 0
     }
 
-    public func vendorSummaries(today: String, monthPrefix: String) throws -> [VendorSummary] {
+    /// last30Start is inclusive; pass today−29d so the window plus today spans 30 days.
+    public func vendorSummaries(today: String, monthPrefix: String, last30Start: String) throws -> [VendorSummary] {
         try db.read { db in
             // UNION with usage_daily and key_totals so spend whose accounts row is
             // gone (e.g. a mid-poll remove re-created rows) — or whose only data so
@@ -224,6 +230,10 @@ public final class UsageStore: Sendable {
                 let monthBeforeToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day LIKE ? || '%' AND day < ?",
                                                            arguments: [vendor, monthPrefix, today]) ?? 0
                 let m = monthBeforeToday + t
+                let last30BeforeToday = try Double.fetchOne(db, sql: """
+                    SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily
+                    WHERE vendor = ? AND day >= ? AND day < ?
+                    """, arguments: [vendor, last30Start, today]) ?? 0
                 let balRow = try Row.fetchOne(db, sql: """
                     SELECT SUM(balance_usd) AS b, SUM(total_credits) AS tc, SUM(total_usage) AS tu
                     FROM balances WHERE vendor = ?
@@ -238,8 +248,8 @@ public final class UsageStore: Sendable {
                     """, arguments: [vendor])
                     .map { KeySpend(accountID: $0["account_id"], apiKeyID: $0["api_key_id"],
                                     totalUSD: $0["total_usd"], todayUSD: $0["today_usd"], mtdUSD: $0["mtd_usd"]) }
-                return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, balanceUSD: bal,
-                                     creditsTotalUSD: credTotal, creditsUsedUSD: credUsed, topKeys: keys)
+                return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, last30USD: last30BeforeToday + t,
+                                     balanceUSD: bal, creditsTotalUSD: credTotal, creditsUsedUSD: credUsed, topKeys: keys)
             }
         }
     }
