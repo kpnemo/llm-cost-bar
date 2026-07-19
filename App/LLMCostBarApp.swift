@@ -24,16 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Placeholder — replaced in Task 13 with the real Settings UI (accounts,
-/// pairing, menu bar display picker, refresh interval, keep-alive toggle).
-struct SettingsView: View {
-    var body: some View {
-        Text("Settings coming in Task 13")
-            .padding(40)
-            .frame(width: 360, height: 200)
-    }
-}
-
 @main
 struct LLMCostBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate

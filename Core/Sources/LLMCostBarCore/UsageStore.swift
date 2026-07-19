@@ -30,6 +30,9 @@ public struct AccountRow: Equatable, Sendable {
 }
 
 public struct SyncLogRow: Equatable, Sendable {
+    /// sync_log.id — always populated when read via recentSyncLog(); optional only so
+    /// tests/callers that don't have a DB row id can still construct one.
+    public var rowID: Int64?
     public var ts: String
     public var vendor: String
     public var accountID: String
@@ -38,6 +41,17 @@ public struct SyncLogRow: Equatable, Sendable {
     public var errorClass: String
     public var message: String
     public var snippet: String?
+
+    public init(rowID: Int64? = nil, ts: String, vendor: String, accountID: String, endpoint: String,
+                httpStatus: Int?, errorClass: String, message: String, snippet: String?) {
+        self.rowID = rowID; self.ts = ts; self.vendor = vendor; self.accountID = accountID
+        self.endpoint = endpoint; self.httpStatus = httpStatus; self.errorClass = errorClass
+        self.message = message; self.snippet = snippet
+    }
+}
+
+extension SyncLogRow: Identifiable {
+    public var id: Int64 { rowID ?? Int64(truncatingIfNeeded: (ts + endpoint + message).hashValue) }
 }
 
 /// All reads/writes both processes perform. `DatabaseWriter` covers DatabasePool (disk) and DatabaseQueue (tests).
@@ -154,7 +168,7 @@ public final class UsageStore: Sendable {
     public func recentSyncLog(limit: Int) throws -> [SyncLogRow] {
         try db.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", arguments: [limit])
-                .map { SyncLogRow(ts: $0["ts"], vendor: $0["vendor"], accountID: $0["account_id"],
+                .map { SyncLogRow(rowID: $0["id"], ts: $0["ts"], vendor: $0["vendor"], accountID: $0["account_id"],
                                   endpoint: $0["endpoint"], httpStatus: $0["http_status"],
                                   errorClass: $0["error_class"], message: $0["message"],
                                   snippet: $0["response_snippet"]) }
