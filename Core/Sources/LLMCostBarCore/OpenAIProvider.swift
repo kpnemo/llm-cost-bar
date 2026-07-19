@@ -139,21 +139,37 @@ public struct OpenAIProvider: VendorProvider {
         return Array(merged.values)
     }
 
-    /// Real per-key dollars over the last 30 days, straight from the vendor
-    /// (group_by=api_key_id). Rows without a key (dashboard/playground and
-    /// non-key costs) are skipped rather than shown as a phantom key.
+    /// Real per-day per-key dollars over the last 30 days (group_by=api_key_id).
+    /// Rows without a key (dashboard/playground and non-key costs) are skipped
+    /// rather than shown as a phantom key.
     public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
-        var totals: [String: Double] = [:]
-        try await costs(startingDaysAgo: 30, now: now, groupBy: "api_key_id") { _, row in
+        var perKeyDay: [String: [String: Double]] = [:]           // key → day → usd
+        try await costs(startingDaysAgo: 30, now: now, groupBy: "api_key_id") { day, row in
             guard let keyID = row.api_key_id, let usd = row.amount?.value?.double, usd != 0 else { return }
-            totals[keyID, default: 0] += usd
+            perKeyDay[keyID, default: [:]][day, default: 0] += usd
         }
-        guard !totals.isEmpty else { return [] }
+        guard !perKeyDay.isEmpty else { return [] }
+        let today = Day.utcToday(now: now)
+        let monthStart = Day.utcMonthPrefix(now: now) + "-01"
         let names = (try? await fetchKeyNames()) ?? [:]
-        var byName: [String: Double] = [:]
-        for (id, usd) in totals { byName[names[id] ?? id, default: 0] += usd }
-        return byName.map { KeyTotal(apiKeyID: $0.key, totalUSD: $0.value) }
-            .sorted { $0.totalUSD > $1.totalUSD }
+        var byName: [String: (total: Double, mtd: Double, today: Double)] = [:]
+        for (id, dayMap) in perKeyDay {
+            let name = names[id] ?? id
+            var agg = byName[name] ?? (0, 0, 0)
+            for (day, usd) in dayMap {
+                agg.total += usd
+                if day >= monthStart { agg.mtd += usd }
+                if day == today { agg.today += usd }
+            }
+            byName[name] = agg
+        }
+        return byName.map { KeyTotal(apiKeyID: $0.key, totalUSD: $0.value.total,
+                                     todayUSD: $0.value.today, mtdUSD: $0.value.mtd) }
+            .sorted {
+                if ($0.mtdUSD ?? 0) != ($1.mtdUSD ?? 0) { return ($0.mtdUSD ?? 0) > ($1.mtdUSD ?? 0) }
+                if $0.totalUSD != $1.totalUSD { return $0.totalUSD > $1.totalUSD }
+                return $0.apiKeyID < $1.apiKeyID
+            }
     }
 
     /// key_… ids → names, via projects → per-project API keys (best effort).
