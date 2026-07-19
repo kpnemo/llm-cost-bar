@@ -26,26 +26,31 @@ struct SettingsView: View {
 struct AccountsTab: View {
     @EnvironmentObject var model: StoreModel
     @EnvironmentObject var pairing: PairingController
+    @State private var showAddFlow = false
+    @State private var selectedProvider = "OpenRouter"
     @State private var newName = "personal"
-    @State private var pastedKey = ""
-    @State private var showPasteField = false
+
+    private let comingSoon = ["OpenAI", "Anthropic", "Gemini"]
 
     var body: some View {
         Form {
-            Section("Connected accounts") {
-                if model.accounts.isEmpty { Text("None yet.").foregroundStyle(.secondary) }
+            Section("Connected providers") {
+                if model.accounts.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("No providers connected yet.").foregroundStyle(.secondary)
+                        Button("Add Provider…") { showAddFlow = true; pairing.state = .idle }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
                 ForEach(model.accounts, id: \.id) { acc in
                     HStack {
                         VStack(alignment: .leading) {
                             Text("\(acc.vendor.capitalized) — \(acc.displayName)")
-                            Text(acc.needsReauth ? "⚠ reconnect needed"
-                                 : (acc.lastSyncOK.map { "✓ connected · synced \($0)" } ?? "waiting for first sync"))
+                            Text(acc.needsReauth ? "⚠ key rejected — remove and add again with a new management key"
+                                 : (acc.lastSyncOK.map { "✓ connected · synced \($0)" } ?? "waiting for first sync…"))
                                 .font(.caption).foregroundStyle(acc.needsReauth ? .red : .secondary)
                         }
                         Spacer()
-                        if acc.needsReauth {
-                            Button("Reconnect") { pairing.startBrowserPairing(displayName: acc.displayName, reconnectAccountID: acc.id) }
-                        }
                         Button("Remove", role: .destructive) {
                             try? model.store.removeAccount(id: acc.id)
                             try? KeychainStore().deleteKey(accountID: acc.id)
@@ -53,39 +58,63 @@ struct AccountsTab: View {
                         }
                     }
                 }
+                if !model.accounts.isEmpty && !showAddFlow {
+                    Button("Add Provider…") { showAddFlow = true; pairing.state = .idle }
+                }
             }
-            Section("Add OpenRouter account") {
-                TextField("Name", text: $newName)
-                HStack {
-                    Button("Connect via browser") { pairing.startBrowserPairing(displayName: newName) }
-                        .disabled(pairing.state == .waitingForBrowser || pairing.state == .exchanging)
-                    Button("paste a key instead…") { showPasteField.toggle() }
+
+            if showAddFlow {
+                Section("Add provider") {
+                    Picker("Provider", selection: $selectedProvider) {
+                        Text("OpenRouter").tag("OpenRouter")
+                        ForEach(comingSoon, id: \.self) { Text("\($0) — coming soon").tag($0).selectionDisabled() }
+                    }
+                    TextField("Account name", text: $newName)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("**Step 1.** Open your OpenRouter provisioning keys page and create a *management key* (a regular API key can't read usage):")
+                            .font(.callout)
+                        Button("Open openrouter.ai provisioning keys ↗") {
+                            NSWorkspace.shared.open(URL(string: "https://openrouter.ai/settings/provisioning-keys")!)
+                        }
+                        Text("**Step 2.** Copy the new key, come back here, and click:")
+                            .font(.callout)
+                        Button("Paste key from clipboard & Test connection") {
+                            pairing.addProviderFromClipboard(displayName: newName)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(pairing.state == .exchanging)
+                    }
+                    .padding(.vertical, 4)
+
+                    pairingStatus
+
+                    Button("Cancel") { showAddFlow = false; pairing.cancelPairing() }
                         .buttonStyle(.link)
                 }
-                if showPasteField {
-                    SecureField("sk-or-v1-…", text: $pastedKey)
-                    Button("Save key") { pairing.pasteKeyPairing(displayName: newName, apiKey: pastedKey); pastedKey = "" }
-                        .disabled(pastedKey.isEmpty || pairing.state == .waitingForBrowser || pairing.state == .exchanging)
-                }
-                pairingStatus
             }
         }
         .formStyle(.grouped)
+        .onChange(of: pairing.state) {
+            if pairing.state == .done { showAddFlow = false }
+        }
     }
 
     @ViewBuilder private var pairingStatus: some View {
         switch pairing.state {
         case .idle: EmptyView()
         case .waitingForBrowser:
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Approve access in your browser", systemImage: "safari")
-                Text("Sign in to openrouter.ai if needed, then click Authorize. You'll be brought back here automatically.")
-                    .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Label("Approve access in your browser…", systemImage: "safari")
                 Button("Cancel") { pairing.cancelPairing() }
             }
-        case .exchanging: Label("Exchanging code…", systemImage: "arrow.triangle.2.circlepath")
-        case .done: Label("Connected — first sync running", systemImage: "checkmark.circle").foregroundStyle(.green)
-        case .failed(let msg): Label(msg, systemImage: "xmark.circle").foregroundStyle(.red)
+        case .exchanging:
+            Label("Testing connection…", systemImage: "arrow.triangle.2.circlepath")
+        case .done:
+            Label("Connected ✓ — first sync runs within seconds", systemImage: "checkmark.circle")
+                .foregroundStyle(.green)
+        case .failed(let msg):
+            Label(msg, systemImage: "xmark.circle").foregroundStyle(.red)
         }
     }
 }
@@ -112,6 +141,27 @@ struct GeneralTab: View {
                 }
             ))
             Button("Sync now") { model.requestSync() }
+
+            Section("Background service") {
+                LabeledContent("Daemon") {
+                    Label(model.daemonHealthy ? "running" : "not responding",
+                          systemImage: model.daemonHealthy ? "checkmark.circle" : "exclamationmark.triangle")
+                        .foregroundStyle(model.daemonHealthy ? .green : .orange)
+                }
+                if !model.daemonHealthy {
+                    Text("If repairing doesn't help, make sure “LLM Cost Bar” is allowed in System Settings → General → Login Items & Extensions.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Repair background service") {
+                        DaemonManager.ensure(heartbeatURL: model.paths.heartbeat, force: true)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { model.refresh() }
+                    }
+                    Button("Open Login Items Settings…") {
+                        SMAppService.openSystemSettingsLoginItems()
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .onChange(of: model.config) { model.saveConfig() }

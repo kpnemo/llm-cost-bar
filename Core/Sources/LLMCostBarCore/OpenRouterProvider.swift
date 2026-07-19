@@ -28,6 +28,15 @@ public struct OpenRouterProvider: VendorProvider {
         }
         let data: [Row]
     }
+    private struct KeysListResp: Decodable {
+        struct K: Decodable {
+            let name: String?
+            let label: String?
+            let usage: Double?
+            let disabled: Bool?
+        }
+        let data: [K]
+    }
     private struct KeyResp: Decodable {
         struct D: Decodable { let label: String? }
         let data: D
@@ -57,6 +66,13 @@ public struct OpenRouterProvider: VendorProvider {
         return Balance(balanceUSD: resp.data.total_credits - resp.data.total_usage)
     }
 
+    public func fetchKeyTotals() async throws -> [KeyTotal] {
+        let resp = try await getJSON("keys", as: KeysListResp.self)
+        return resp.data.map {
+            KeyTotal(apiKeyID: $0.name ?? $0.label ?? "unnamed", totalUSD: $0.usage ?? 0)
+        }
+    }
+
     public func fetchUsage(sinceDaysAgo: Int, now: Date = Date()) async throws -> [UsageRecord] {
         // /activity returns the whole recent window; sinceDaysAgo filters client-side.
         let keyLabel = (try? await validateCredentials().label) ?? "default"
@@ -64,7 +80,9 @@ public struct OpenRouterProvider: VendorProvider {
         let cutoff = Day.utcToday(now: now.addingTimeInterval(-Double(sinceDaysAgo) * 86400))
         return resp.data.filter { $0.date >= cutoff }.map { row in
             UsageRecord(vendor: vendorID, accountID: accountID, apiKeyID: keyLabel,
-                        model: row.model, day: row.date,
+                        // Live API returns "2026-07-18 00:00:00"; normalize to the bare
+                        // day key the store's exact-match queries use.
+                        model: row.model, day: String(row.date.prefix(10)),
                         requests: row.requests ?? 0,
                         tokensIn: row.prompt_tokens ?? 0, tokensOut: row.completion_tokens ?? 0,
                         costUSD: row.usage)

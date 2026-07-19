@@ -82,6 +82,16 @@ public final class SyncEngine: @unchecked Sendable {
         } catch {
             handle(.transient(truncated(String(describing: error))), account: account, endpoint: "balance")
         }
+
+        // Per-key lifetime totals — best-effort like balance; never blocks usage sync.
+        do {
+            let totals = try await withRetry(sleeper: sleeper) { try await provider.fetchKeyTotals() }
+            try store.upsertKeyTotals(vendor: account.vendor, accountID: account.id, totals: totals)
+        } catch let e as ProviderError {
+            handle(e, account: account, endpoint: "keys", setReauthOnAuth: false)
+        } catch {
+            handle(.transient(truncated(String(describing: error))), account: account, endpoint: "keys")
+        }
     }
 
     private func handle(_ e: ProviderError, account: AccountRow, endpoint: String, setReauthOnAuth: Bool = true) {

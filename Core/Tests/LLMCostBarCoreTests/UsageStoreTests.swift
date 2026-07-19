@@ -32,6 +32,11 @@ final class UsageStoreTests: XCTestCase {
                         requests: 50, tokensIn: 9000, tokensOut: 4000, costUSD: 59.10),
         ])
         try store.upsertBalance(vendor: "openrouter", accountID: "acc1", balanceUSD: 38.50)
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "acc1", totals: [
+            KeyTotal(apiKeyID: "claude-code", totalUSD: 120.5),
+            KeyTotal(apiKeyID: "research-bot", totalUSD: 12.25),
+            KeyTotal(apiKeyID: "unused-key", totalUSD: 0),
+        ])
     }
 
     func testUpsertIsIdempotentAndOverwrites() throws {
@@ -58,9 +63,10 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(v.todayUSD, 2.10, accuracy: 0.001)
         XCTAssertEqual(v.monthUSD, 61.20, accuracy: 0.001)
         XCTAssertEqual(v.balanceUSD, 38.50)
-        XCTAssertEqual(v.topKeys.first?.apiKeyID, "claude-code") // ranked by today's spend
+        XCTAssertEqual(v.topKeys.count, 2)                        // zero-spend keys hidden
+        XCTAssertEqual(v.topKeys.first?.apiKeyID, "claude-code")  // ranked by lifetime spend
         XCTAssertEqual(v.topKeys.first?.accountID, "acc1")
-        XCTAssertEqual(v.topKeys.first?.todayUSD ?? 0, 1.40, accuracy: 0.001)
+        XCTAssertEqual(v.topKeys.first?.totalUSD ?? 0, 120.5, accuracy: 0.001)
     }
 
     func testSyncLogRoundTrip() throws {

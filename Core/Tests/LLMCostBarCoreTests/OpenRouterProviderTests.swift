@@ -18,7 +18,7 @@ final class OpenRouterProviderTests: XCTestCase {
     let creditsJSON = #"{"data":{"total_credits":110.0,"total_usage":71.5}}"#
     let activityJSON = #"""
     {"data":[
-      {"date":"2026-07-19","model":"anthropic/claude-sonnet-4","usage":1.40,"requests":10,"prompt_tokens":1000,"completion_tokens":500},
+      {"date":"2026-07-19 00:00:00","model":"anthropic/claude-sonnet-4","usage":1.40,"requests":10,"prompt_tokens":1000,"completion_tokens":500},
       {"date":"2026-07-19","model":"openai/gpt-5","usage":0.70,"requests":3,"prompt_tokens":200,"completion_tokens":100},
       {"date":"2026-07-01","model":"anthropic/claude-sonnet-4","usage":59.10,"requests":50,"prompt_tokens":9000,"completion_tokens":4000}
     ]}

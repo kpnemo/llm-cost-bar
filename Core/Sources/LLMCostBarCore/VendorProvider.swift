@@ -5,6 +5,11 @@ public protocol VendorProvider: Sendable {
     func validateCredentials() async throws -> AccountInfo
     func fetchUsage(sinceDaysAgo: Int, now: Date) async throws -> [UsageRecord]
     func fetchBalance() async throws -> Balance?      // nil if vendor has no prepaid balance
+    func fetchKeyTotals() async throws -> [KeyTotal]  // per-key lifetime spend; [] if unsupported
+}
+
+public extension VendorProvider {
+    func fetchKeyTotals() async throws -> [KeyTotal] { [] }
 }
 
 /// Retries transient errors only (network/429/5xx). Auth and decode errors surface immediately.
