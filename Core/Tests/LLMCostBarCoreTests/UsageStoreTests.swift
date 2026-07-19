@@ -72,6 +72,31 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(v.topKeys.first?.totalUSD ?? 0, 120.5, accuracy: 0.001)
     }
 
+    func testLiveTodayDeltaOverridesLaggingActivity() throws {
+        let store = UsageStore(db: try makeDB())
+        try store.addAccount(id: "acc1", vendor: "openrouter", displayName: "personal")
+        // Activity feed lags: no rows for today, one for yesterday.
+        try store.upsertUsage([
+            UsageRecord(vendor: "openrouter", accountID: "acc1", apiKeyID: "k",
+                        model: "m", day: "2026-07-18", requests: 1,
+                        tokensIn: 10, tokensOut: 5, costUSD: 3.00),
+        ])
+        // First sync of the day snapshotted lifetime usage at 70.0; it's now 72.5.
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "acc1",
+                                      day: "2026-07-19", totalUsageUSD: 70.0)
+        try store.upsertBalance(vendor: "openrouter", accountID: "acc1",
+                                balance: Balance(balanceUSD: 7.5, totalCreditsUSD: 80, totalUsageUSD: 72.5))
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        XCTAssertEqual(s.todayUSD, 2.5, accuracy: 0.001)          // live delta, not 0
+        XCTAssertEqual(s.monthUSD, 5.5, accuracy: 0.001)          // 3.00 (yesterday) + 2.5, no double count
+        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")[0]
+        XCTAssertEqual(v.todayUSD, 2.5, accuracy: 0.001)
+        // Baseline is INSERT OR IGNORE — a later sync must not move it.
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "acc1",
+                                      day: "2026-07-19", totalUsageUSD: 99.0)
+        XCTAssertEqual(try store.summary(today: "2026-07-19", monthPrefix: "2026-07").todayUSD, 2.5, accuracy: 0.001)
+    }
+
     func testSyncLogRoundTrip() throws {
         let store = UsageStore(db: try makeDB())
         try store.logSync(vendor: "openrouter", accountID: "acc1", endpoint: "/api/v1/credits",

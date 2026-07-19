@@ -1,10 +1,12 @@
 import SwiftUI
+import Charts
 import LLMCostBarCore
 
 struct DropdownView: View {
     @EnvironmentObject var model: StoreModel
     @EnvironmentObject var pairing: PairingController
     @Environment(\.openSettings) private var openSettings
+    @State private var collapsed: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -15,7 +17,14 @@ struct DropdownView: View {
             }
 
             ForEach(model.vendors, id: \.vendor) { v in
-                VendorCard(vendor: v, account: model.accounts.first { $0.vendor == v.vendor })
+                VendorCard(vendor: v,
+                           account: model.accounts.first { $0.vendor == v.vendor },
+                           series: model.series[v.vendor] ?? [],
+                           isCollapsed: collapsed.contains(v.vendor),
+                           toggle: {
+                               if collapsed.contains(v.vendor) { collapsed.remove(v.vendor) }
+                               else { collapsed.insert(v.vendor) }
+                           })
             }
 
             if model.vendors.isEmpty {
@@ -60,19 +69,63 @@ struct DropdownView: View {
 struct VendorCard: View {
     let vendor: VendorSummary
     let account: AccountRow?
+    let series: [DayCost]
+    let isCollapsed: Bool
+    let toggle: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // Header row is the collapse toggle — always visible.
             HStack {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.caption2).foregroundStyle(.tertiary)
                 Text(vendorDisplayName).bold()
+                if isCollapsed {
+                    Text("today \(usd(vendor.todayUSD))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 0) {
                     Text(usd(vendor.monthUSD)).bold()
                     Text("this month").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: toggle)
+
+            if !isCollapsed {
+                expandedContent
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder private var expandedContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
             Text("today \(usd(vendor.todayUSD))")
                 .font(.caption).foregroundStyle(.secondary)
+
+            if !series.isEmpty {
+                Chart(filledSeries, id: \.day) { point in
+                    BarMark(x: .value("Day", String(point.day.suffix(5))),
+                            y: .value("USD", point.costUSD))
+                        .foregroundStyle(.blue.opacity(0.7))
+                }
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                        AxisValueLabel().font(.system(size: 7))
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                        AxisGridLine()
+                        AxisValueLabel().font(.system(size: 7))
+                    }
+                }
+                .frame(height: 56)
+                .padding(.vertical, 2)
+            }
 
             if let total = vendor.creditsTotalUSD, let used = vendor.creditsUsedUSD, total > 0 {
                 let fraction = min(used / total, 1.0)
@@ -112,8 +165,19 @@ struct VendorCard: View {
                 .foregroundStyle(.secondary)
             }
         }
-        .padding(10)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Fill missing days with zero bars so the 30-day chart has a continuous axis.
+    private var filledSeries: [DayCost] {
+        let byDay = Dictionary(uniqueKeysWithValues: series.map { ($0.day, $0.costUSD) })
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.calendar = Calendar(identifier: .gregorian)
+        fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")
+        return (0..<30).reversed().map { offset in
+            let day = fmt.string(from: Date().addingTimeInterval(-Double(offset) * 86400))
+            return DayCost(day: day, costUSD: byDay[day] ?? 0)
+        }
     }
 
     private var vendorDisplayName: String {

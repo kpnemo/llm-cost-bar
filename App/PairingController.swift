@@ -84,7 +84,7 @@ final class PairingController: ObservableObject {
         Task {
             do {
                 let key = try await OpenRouterPairing.exchange(code: code, verifier: verifier)
-                try finishPairing(apiKey: key, displayName: displayName, reconnectAccountID: reconnectID)
+                try finishPairing(vendor: "openrouter", apiKey: key, displayName: displayName, reconnectAccountID: reconnectID)
             } catch {
                 state = .failed("key exchange failed: \(error)")
             }
@@ -108,7 +108,7 @@ final class PairingController: ObservableObject {
     func pasteKeyPairing(displayName: String, apiKey: String) {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { state = .failed("key is empty"); return }
-        do { try finishPairing(apiKey: key, displayName: displayName, reconnectAccountID: nil) }
+        do { try finishPairing(vendor: "openrouter", apiKey: key, displayName: displayName, reconnectAccountID: nil) }
         catch {
             state = .failed("saving key failed: \(error)")
             logPairing(errorClass: "pairing", message: "paste failed: \(error)")
@@ -120,46 +120,50 @@ final class PairingController: ObservableObject {
     /// live-test it against the real endpoints before storing anything. Only a key that
     /// can actually read activity gets saved — a regular API key fails the test with a
     /// pointed message instead of being stored and failing silently in the daemon.
-    func addProviderFromClipboard(displayName: String) {
+    func addProviderFromClipboard(vendor: String, displayName: String) {
         guard let raw = NSPasteboard.general.string(forType: .string)?
             .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-            state = .failed("Clipboard is empty — copy the management key first, then click again")
+            state = .failed("Clipboard is empty — copy the key first, then click again")
             return
         }
-        guard raw.hasPrefix("sk-or-") else {
-            state = .failed("Clipboard doesn't contain an OpenRouter key (should start with sk-or-…)")
+        let expectedPrefix = vendor == "anthropic" ? "sk-ant-admin" : "sk-or-"
+        let keyKind = vendor == "anthropic" ? "Anthropic ADMIN key (sk-ant-admin…)" : "OpenRouter management key (sk-or-…)"
+        guard raw.hasPrefix(expectedPrefix) else {
+            state = .failed("Clipboard doesn't contain an \(keyKind)")
             return
         }
         state = .exchanging   // rendered as "Testing connection…"
         Task {
-            let provider = OpenRouterProvider(accountID: "probe", credential: Credential(apiKey: raw))
+            let provider: VendorProvider = vendor == "anthropic"
+                ? AnthropicProvider(accountID: "probe", credential: Credential(apiKey: raw))
+                : OpenRouterProvider(accountID: "probe", credential: Credential(apiKey: raw))
             do {
-                _ = try await provider.fetchUsage(sinceDaysAgo: 2, now: Date())   // the call that needs a management key
-                try finishPairing(apiKey: raw, displayName: displayName, reconnectAccountID: nil)
+                _ = try await provider.fetchUsage(sinceDaysAgo: 2, now: Date())   // the call that needs the elevated key
+                try finishPairing(vendor: vendor, apiKey: raw, displayName: displayName, reconnectAccountID: nil)
             } catch let e as ProviderError {
                 let msg: String
                 switch e {
-                case .auth: msg = "Key rejected by OpenRouter — make sure you created a MANAGEMENT (provisioning) key, not a regular API key"
+                case .auth: msg = "Key rejected — make sure it's a \(keyKind), not a regular API key"
                 case .transient: msg = "Network problem while testing — try again"
                 default: msg = "Connection test failed (\(e.errorClass)) — see Diagnostics"
                 }
                 state = .failed(msg)
-                logPairing(errorClass: "pairing", message: "probe failed: \(String(String(describing: e).prefix(120)))")
+                logPairing(errorClass: "pairing", message: "probe(\(vendor)) failed: \(String(String(describing: e).prefix(120)))")
             } catch {
                 state = .failed("Connection test failed — see Diagnostics")
-                logPairing(errorClass: "pairing", message: "probe failed: \(String(String(describing: error).prefix(120)))")
+                logPairing(errorClass: "pairing", message: "probe(\(vendor)) failed: \(String(String(describing: error).prefix(120)))")
             }
         }
     }
 
-    private func finishPairing(apiKey: String, displayName: String, reconnectAccountID: String?) throws {
+    private func finishPairing(vendor: String, apiKey: String, displayName: String, reconnectAccountID: String?) throws {
         if let existingID = reconnectAccountID {
             try keychain.setKey(apiKey, accountID: existingID)   // re-key existing account
             logPairing(errorClass: "ok", message: "re-keyed account \(existingID)")
         } else {
-            let accountID = "openrouter-\(UUID().uuidString.prefix(8))"
+            let accountID = "\(vendor)-\(UUID().uuidString.prefix(8))"
             try keychain.setKey(apiKey, accountID: accountID)
-            try pairingStore().addAccount(id: accountID, vendor: "openrouter",
+            try pairingStore().addAccount(id: accountID, vendor: vendor,
                                           displayName: displayName.isEmpty ? "personal" : displayName)
             logPairing(errorClass: "ok", message: "added account \(accountID)")
         }
