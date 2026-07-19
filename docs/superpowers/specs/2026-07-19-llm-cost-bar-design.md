@@ -66,7 +66,7 @@ Normalization to **daily granularity** is the core decision: it is the common de
 - `usage_daily(vendor, account_id, api_key_id, model, day, requests, tokens_in, tokens_out, cost_usd)` — PK: (vendor, account_id, api_key_id, model, day). Upsert on conflict.
 - `balances(vendor, account_id, balance_usd, fetched_at)` — prepaid vendors (OpenRouter).
 - `accounts(id, vendor, display_name, status, last_sync_ok, needs_reauth)` — credentials themselves live in Keychain, keyed by account id. Multiple rows per vendor = multiple accounts.
-- `alert_rules`, `alert_events` — present in schema from day one, unused until phase 2.
+- `alert_events` — present in schema from day one, unused until phase 2. (Alert *rules* are user configuration and live in config.json, not SQLite.)
 - `sync_log(ts, vendor, account_id, endpoint, http_status, error_class, message, response_snippet)` — every sync attempt's outcome, for diagnostics.
 
 ## Vendor Provider Protocol
