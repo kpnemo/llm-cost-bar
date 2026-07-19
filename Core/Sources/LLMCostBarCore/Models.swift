@@ -18,8 +18,10 @@ public struct UsageRecord: Equatable, Sendable {
     }
 }
 
-/// One API key's lifetime spend, from the vendor's key-management API
-/// (OpenRouter's activity feed has no per-key attribution; totals are the best available).
+/// One API key's spend total. The window depends on the vendor: OpenRouter
+/// reports lifetime totals from its key API; OpenAI real 30-day dollars;
+/// Anthropic 30-day estimates (no per-key cost API). The dropdown captions
+/// per vendor accordingly.
 public struct KeyTotal: Equatable, Sendable {
     public var apiKeyID: String
     public var totalUSD: Double

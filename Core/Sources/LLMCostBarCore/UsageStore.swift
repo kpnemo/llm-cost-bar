@@ -130,6 +130,12 @@ public final class UsageStore: Sendable {
             try db.execute(sql: "DELETE FROM accounts WHERE id = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM usage_daily WHERE account_id = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM balances WHERE account_id = ?", arguments: [id])
+            // Orphans here are user-visible: key_totals pools per vendor across
+            // account ids (stale rows would double the per-key list after a
+            // remove-and-repair), and usage_snapshots would seed a bogus live
+            // "today" delta if the same account id ever came back.
+            try db.execute(sql: "DELETE FROM key_totals WHERE account_id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM usage_snapshots WHERE account_id = ?", arguments: [id])
         }
     }
 
@@ -163,42 +169,52 @@ public final class UsageStore: Sendable {
     // MARK: reads (app)
 
     public func summary(today: String, monthPrefix: String) throws -> Summary {
-        try db.read { db in
-            let activityToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE day = ?",
-                                                    arguments: [today]) ?? 0
-            let monthBeforeToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE day LIKE ? || '%' AND day < ?",
-                                                       arguments: [monthPrefix, today]) ?? 0
-            let liveDelta = try Self.liveTodayDelta(db, vendor: nil, today: today)
-            // Activity feeds can lag the current day; the lifetime-usage delta is live.
-            // Take whichever knows more, and count today only once in the month total.
-            let t = max(activityToday, liveDelta)
-            return Summary(todayUSD: t, monthUSD: monthBeforeToday + t)
-        }
+        // Today must equal the sum of the per-vendor cards. Each card takes
+        // max(activityToday, liveDelta) for ITS vendor; taking a single max over
+        // the pooled sums under-counts whenever one vendor's feed lags (live delta
+        // wins) while another's is current (activity wins). So compute per-vendor
+        // and sum, rather than a parallel pooled query.
+        let vendors = try vendorSummaries(today: today, monthPrefix: monthPrefix)
+        return Summary(todayUSD: vendors.reduce(0) { $0 + $1.todayUSD },
+                       monthUSD: vendors.reduce(0) { $0 + $1.monthUSD })
     }
 
-    /// Sum over accounts of (current lifetime usage − today's first-sync baseline), clamped ≥ 0.
-    private static func liveTodayDelta(_ db: GRDB.Database, vendor: String?, today: String) throws -> Double {
-        var sql = """
+    /// One account's (current lifetime usage − today's first-sync baseline), clamped ≥ 0.
+    private static func liveTodayDelta(_ db: GRDB.Database, vendor: String, accountID: String, today: String) throws -> Double {
+        try Double.fetchOne(db, sql: """
             SELECT COALESCE(SUM(MAX(b.total_usage - s.baseline_usage_usd, 0)), 0)
             FROM balances b
             JOIN usage_snapshots s ON s.vendor = b.vendor AND s.account_id = b.account_id AND s.day = ?
-            WHERE b.total_usage IS NOT NULL
-            """
-        var args: [DatabaseValueConvertible] = [today]
-        if let vendor { sql += " AND b.vendor = ?"; args.append(vendor) }
-        return try Double.fetchOne(db, sql: sql, arguments: StatementArguments(args)) ?? 0
+            WHERE b.total_usage IS NOT NULL AND b.vendor = ? AND b.account_id = ?
+            """, arguments: [today, vendor, accountID]) ?? 0
     }
 
     public func vendorSummaries(today: String, monthPrefix: String) throws -> [VendorSummary] {
         try db.read { db in
-            let vendors = try String.fetchAll(db, sql: "SELECT DISTINCT vendor FROM accounts ORDER BY vendor")
+            // UNION with usage_daily so spend whose accounts row is gone (e.g. a
+            // mid-poll remove re-created rows) still shows instead of silently
+            // vanishing from Today/MTD.
+            let vendors = try String.fetchAll(db, sql: """
+                SELECT vendor FROM (SELECT vendor FROM accounts UNION SELECT vendor FROM usage_daily) ORDER BY vendor
+                """)
             return try vendors.map { vendor in
-                let activityToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day = ?",
-                                                        arguments: [vendor, today]) ?? 0
+                // Today = per-ACCOUNT max(activity, live delta), summed. A max over
+                // vendor-pooled sums under-counts when one account's feed lags
+                // (live delta wins) while another's is current (activity wins) —
+                // the same bug summary() had at the vendor level.
+                let accountIDs = try String.fetchAll(db, sql: """
+                    SELECT id FROM accounts WHERE vendor = ?
+                    UNION SELECT DISTINCT account_id FROM usage_daily WHERE vendor = ?
+                    """, arguments: [vendor, vendor])
+                var t = 0.0
+                for accountID in accountIDs {
+                    let activityToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND account_id = ? AND day = ?",
+                                                            arguments: [vendor, accountID, today]) ?? 0
+                    let liveDelta = try Self.liveTodayDelta(db, vendor: vendor, accountID: accountID, today: today)
+                    t += max(activityToday, liveDelta)
+                }
                 let monthBeforeToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day LIKE ? || '%' AND day < ?",
                                                            arguments: [vendor, monthPrefix, today]) ?? 0
-                let liveDelta = try Self.liveTodayDelta(db, vendor: vendor, today: today)
-                let t = max(activityToday, liveDelta)
                 let m = monthBeforeToday + t
                 let balRow = try Row.fetchOne(db, sql: """
                     SELECT SUM(balance_usd) AS b, SUM(total_credits) AS tc, SUM(total_usage) AS tu

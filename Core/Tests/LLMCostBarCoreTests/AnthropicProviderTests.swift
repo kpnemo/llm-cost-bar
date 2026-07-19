@@ -25,7 +25,10 @@ final class AnthropicProviderTests: XCTestCase {
     func testCostReportNormalizesAndMergesPerModelPerDay() async throws {
         let http = FakeHTTP(); http.responses["cost_report"] = (costJSON, 200)
         let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: Date())
-        XCTAssertEqual(records.count, 3)   // opus/18th merged, haiku/18th, opus/19th; zero row dropped
+        // opus/18th merged, haiku/18th, opus/19th, haiku/19th (zero rows kept so
+        // vendor corrections can overwrite stale data via the upsert)
+        XCTAssertEqual(records.count, 4)
+        XCTAssertEqual(records.first { $0.model == "claude-haiku-4-5" && $0.day == "2026-07-19" }?.costUSD, 0)
         let opus18 = records.first { $0.model == "claude-opus-4-8" && $0.day == "2026-07-18" }
         XCTAssertEqual(opus18?.costUSD ?? 0, 14.84, accuracy: 0.001)   // (1234+250) cents
         XCTAssertEqual(opus18?.vendor, "anthropic")
@@ -45,12 +48,98 @@ final class AnthropicProviderTests: XCTestCase {
         }
     }
 
-    func testBalanceIsNilAndKeyTotalsEmpty() async throws {
-        let http = FakeHTTP()
-        let p = makeProvider(http)
-        let balance = try await p.fetchBalance()
+    func testBalanceIsNil() async throws {
+        let balance = try await makeProvider(FakeHTTP()).fetchBalance()
         XCTAssertNil(balance)
-        let totals = try await p.fetchKeyTotals()
+    }
+
+    // Per-key estimation fixtures: usage_report gives weighted tokens per
+    // (key, model); cost_report gives dollars per model. Weights below:
+    //   key A on opus (dated model id): 875 uncached + 1.25*100 cache-5m + 5*100 output = 1500
+    //   key B on opus:                  250 uncached + 0.1*2500 cache-read           =  500
+    //   key B on haiku:                 2000 uncached                                 = 2000
+    let usageJSON = #"""
+    {"data":[
+      {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+        {"api_key_id":"apikey_A","model":"claude-opus-4-8-20260101","uncached_input_tokens":875,
+         "cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":0},
+         "cache_read_input_tokens":0,"output_tokens":100},
+        {"api_key_id":"apikey_B","model":"claude-opus-4-8","uncached_input_tokens":250,
+         "cache_read_input_tokens":2500,"output_tokens":0},
+        {"api_key_id":"apikey_B","model":"claude-haiku-4-5","uncached_input_tokens":2000}
+      ]}
+    ],"has_more":false,"next_page":null}
+    """#
+    // opus $20 split 1500:500 → A 15, B 5. haiku $1 → B. claude-unknown-9 $4 has
+    // no usage rows → split by overall weight 1500:2500 → A 1.5, B 2.5.
+    let keyCostJSON = #"""
+    {"data":[
+      {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+        {"currency":"USD","amount":"2000","model":"claude-opus-4-8","description":"opus"},
+        {"currency":"USD","amount":"100","model":"claude-haiku-4-5","description":"haiku"},
+        {"currency":"USD","amount":"400","model":"claude-unknown-9","description":"mystery"}
+      ]}
+    ],"has_more":false,"next_page":null}
+    """#
+    let keysListJSON = #"""
+    {"data":[{"id":"apikey_A","name":"prod"},{"id":"apikey_B","name":null}],
+     "has_more":false,"last_id":"apikey_B"}
+    """#
+
+    func testKeyTotalsAllocateCostByWeightedTokens() async throws {
+        let http = FakeHTTP()
+        http.responses["usage_report"] = (usageJSON, 200)
+        http.responses["cost_report"] = (keyCostJSON, 200)
+        http.responses["api_keys"] = (keysListJSON, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals()
+        XCTAssertEqual(totals.count, 2)
+        XCTAssertEqual(totals[0].apiKeyID, "prod")            // named via api_keys list
+        XCTAssertEqual(totals[0].totalUSD, 16.5, accuracy: 0.01)
+        XCTAssertEqual(totals[1].apiKeyID, "apikey_B")        // no name → raw id
+        XCTAssertEqual(totals[1].totalUSD, 8.5, accuracy: 0.01)
+        // Estimates must sum to the vendor-reported total ($25).
+        XCTAssertEqual(totals.map(\.totalUSD).reduce(0, +), 25.0, accuracy: 0.01)
+    }
+
+    func testKeyTotalsEmptyWhenNoUsage() async throws {
+        let http = FakeHTTP()
+        http.responses["usage_report"] = (#"{"data":[],"has_more":false,"next_page":null}"#, 200)
+        http.responses["cost_report"] = (#"{"data":[],"has_more":false,"next_page":null}"#, 200)
+        http.responses["api_keys"] = (#"{"data":[],"has_more":false,"last_id":null}"#, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals()
         XCTAssertTrue(totals.isEmpty)
+    }
+
+    func testKeyNamesFailureFallsBackToIDs() async throws {
+        let http = FakeHTTP()
+        http.responses["usage_report"] = (usageJSON, 200)
+        http.responses["cost_report"] = (keyCostJSON, 200)
+        http.responses["api_keys"] = (#"{"error":"forbidden"}"#, 403)
+        let totals = try await makeProvider(http).fetchKeyTotals()
+        XCTAssertEqual(totals.map(\.apiKeyID).sorted(), ["apikey_A", "apikey_B"])
+    }
+
+    /// cost_report paginates via has_more/next_page; all pages must be merged.
+    func testFetchUsageMergesAcrossPages() async throws {
+        let costJSONPage1 = #"""
+        {"data":[{"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+          {"currency":"USD","amount":"1000","model":"claude-opus-4-8","description":"opus p1"}
+        ]}],"has_more":true,"next_page":"page-2"}
+        """#
+        let costJSONPage2 = #"""
+        {"data":[{"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+          {"currency":"USD","amount":"500","model":"claude-opus-4-8","description":"opus p2"}
+        ]}],"has_more":false,"next_page":null}
+        """#
+        let http = FakeHTTP()
+        // Page-1 URL is cost_report?<base params> (no page token); page-2 appends
+        // &page=page-2. Give page-2 the LONGER key (includes the page token) so it
+        // deterministically wins FakeHTTP's most-specific-substring match on page-2's
+        // URL, which also contains the short page-1 key.
+        http.responses["cost_report"] = (costJSONPage1, 200)          // 11 chars
+        http.responses["&page=page-2"] = (costJSONPage2, 200)         // 12 chars, present only in page-2's URL → wins
+        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: Date())
+        XCTAssertEqual(records.count, 1, "same model+day across pages must merge into one row")
+        XCTAssertEqual(records[0].costUSD, 15.0, accuracy: 0.001, "1000+500 cents across two pages")
     }
 }

@@ -24,7 +24,12 @@ public func withRetry<T: Sendable>(attempts: Int = 3,
             lastError = e
             if attempt < attempts - 1 { await sleeper(pow(2.0, Double(attempt))) } // 1s, 2s
         }
-        catch { lastError = ProviderError.transient(String(describing: error)) }
+        catch {
+            // Unknown error → treat as transient (retry), and back off too — previously
+            // this path skipped the sleeper, spinning in a tight retry loop with no delay.
+            lastError = ProviderError.transient(String(describing: error))
+            if attempt < attempts - 1 { await sleeper(pow(2.0, Double(attempt))) }
+        }
     }
     throw lastError
 }

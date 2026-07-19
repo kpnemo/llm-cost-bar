@@ -134,4 +134,107 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertFalse(account.needsReauth)
         XCTAssertNotNil(account.lastSyncOK)
     }
+
+    /// Regression: header Today must equal the sum of the per-vendor cards even when
+    /// one vendor's activity feed lags (live baseline delta wins) while another's is
+    /// current (activity rows win). Previously summary() took a single max over the
+    /// POOLED activity sum and the POOLED live delta, under-counting vs the cards,
+    /// which each take their own per-vendor max.
+    func testHeaderTodayEqualsSumOfVendorCardsWhenFeedsDisagree() throws {
+        let store = UsageStore(db: try makeDB())
+        // OpenAI: activity feed is current for today.
+        try store.addAccount(id: "acc-oai", vendor: "openai", displayName: "oai")
+        try store.upsertUsage([UsageRecord(vendor: "openai", accountID: "acc-oai", apiKeyID: "org",
+                                           model: "GPT-4o", day: "2026-07-19", requests: 1,
+                                           tokensIn: 1, tokensOut: 1, costUSD: 0.054)])
+        // OpenRouter: activity feed lags (no row for today); live balance delta is the truth.
+        try store.addAccount(id: "acc-or", vendor: "openrouter", displayName: "or")
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "acc-or",
+                                      day: "2026-07-19", totalUsageUSD: 70.528)
+        try store.upsertBalance(vendor: "openrouter", accountID: "acc-or",
+                                balance: Balance(balanceUSD: 9, totalCreditsUSD: 80, totalUsageUSD: 70.982))
+        // Anthropic: nothing at all today.
+        try store.addAccount(id: "acc-ant", vendor: "anthropic", displayName: "ant")
+
+        let summary = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        let vendors = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        XCTAssertEqual(vendors.count, 3)
+        let cardsToday = vendors.reduce(0) { $0 + $1.todayUSD }
+        let cardsMonth = vendors.reduce(0) { $0 + $1.monthUSD }
+        // openai 0.054 + openrouter (70.982-70.528)=0.454 + anthropic 0 = 0.508
+        XCTAssertEqual(cardsToday, 0.508, accuracy: 0.001)
+        XCTAssertEqual(summary.todayUSD, cardsToday, accuracy: 0.0001,
+                       "header today must equal the sum of the vendor cards")
+        XCTAssertEqual(summary.monthUSD, cardsMonth, accuracy: 0.0001,
+                       "header MTD must equal the sum of the vendor cards")
+    }
+
+    /// Multi-vendor: rows are bucketed per vendor and the header aggregates all of them.
+    func testSummaryAggregatesAcrossVendors() throws {
+        let store = UsageStore(db: try makeDB())
+        try store.addAccount(id: "a1", vendor: "openrouter", displayName: "or")
+        try store.addAccount(id: "a2", vendor: "openai", displayName: "oai")
+        try store.upsertUsage([
+            UsageRecord(vendor: "openrouter", accountID: "a1", apiKeyID: "k", model: "m",
+                        day: "2026-07-19", requests: 1, tokensIn: 1, tokensOut: 1, costUSD: 1.0),
+            UsageRecord(vendor: "openai", accountID: "a2", apiKeyID: "k", model: "m",
+                        day: "2026-07-19", requests: 1, tokensIn: 1, tokensOut: 1, costUSD: 2.0),
+            UsageRecord(vendor: "openai", accountID: "a2", apiKeyID: "k", model: "m",
+                        day: "2026-07-01", requests: 1, tokensIn: 1, tokensOut: 1, costUSD: 10.0),
+        ])
+        let vendors = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        XCTAssertEqual(Set(vendors.map(\.vendor)), ["openrouter", "openai"])
+        XCTAssertEqual(vendors.first { $0.vendor == "openrouter" }?.todayUSD ?? 0, 1.0, accuracy: 0.001)
+        XCTAssertEqual(vendors.first { $0.vendor == "openai" }?.monthUSD ?? 0, 12.0, accuracy: 0.001)
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        XCTAssertEqual(s.todayUSD, 3.0, accuracy: 0.001)
+        XCTAssertEqual(s.monthUSD, 13.0, accuracy: 0.001)
+    }
+
+    /// Regression: the per-vendor Today must sum per-ACCOUNT maxes. A max over
+    /// vendor-pooled sums under-counts when one account's activity feed is current
+    /// while another account's lags and only its live delta knows about spend.
+    func testVendorTodaySumsPerAccountMaxes() throws {
+        let store = UsageStore(db: try makeDB())
+        // Account 1: activity current ($5); its live delta only knows $2.
+        try store.addAccount(id: "a1", vendor: "openrouter", displayName: "one")
+        try store.upsertUsage([UsageRecord(vendor: "openrouter", accountID: "a1", apiKeyID: "k",
+                                           model: "m", day: "2026-07-19", requests: 0,
+                                           tokensIn: 0, tokensOut: 0, costUSD: 5)])
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "a1", day: "2026-07-19", totalUsageUSD: 100)
+        try store.upsertBalance(vendor: "openrouter", accountID: "a1",
+                                balance: Balance(balanceUSD: 0, totalCreditsUSD: nil, totalUsageUSD: 102))
+        // Account 2: activity lags (no rows); live delta is the truth ($3).
+        try store.addAccount(id: "a2", vendor: "openrouter", displayName: "two")
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "a2", day: "2026-07-19", totalUsageUSD: 50)
+        try store.upsertBalance(vendor: "openrouter", accountID: "a2",
+                                balance: Balance(balanceUSD: 0, totalCreditsUSD: nil, totalUsageUSD: 53))
+
+        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        XCTAssertEqual(v.count, 1)
+        // max(5,2) + max(0,3) = 8; a vendor-pooled max(5+0, 2+3) would say 5.
+        XCTAssertEqual(v[0].todayUSD, 8.0, accuracy: 0.001)
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        XCTAssertEqual(s.todayUSD, 8.0, accuracy: 0.001)
+    }
+
+    /// Regression: removing an account must not leave key_totals/usage_snapshots
+    /// orphans — stale key rows would double the per-key list after re-pairing.
+    func testRemoveAccountClearsKeyTotalsAndSnapshots() throws {
+        let store = UsageStore(db: try makeDB())
+        try store.addAccount(id: "a1", vendor: "openai", displayName: "one")
+        try store.upsertKeyTotals(vendor: "openai", accountID: "a1",
+                                  totals: [KeyTotal(apiKeyID: "prod", totalUSD: 9)])
+        try store.recordDailyBaseline(vendor: "openai", accountID: "a1", day: "2026-07-19", totalUsageUSD: 1)
+        try store.removeAccount(id: "a1")
+
+        // Re-pair under a new account id: the vendor card must show only fresh rows.
+        try store.addAccount(id: "a2", vendor: "openai", displayName: "two")
+        try store.upsertKeyTotals(vendor: "openai", accountID: "a2",
+                                  totals: [KeyTotal(apiKeyID: "prod", totalUSD: 4)])
+        let v = try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07")
+        XCTAssertEqual(v.count, 1)
+        XCTAssertEqual(v[0].topKeys.count, 1, "stale key_totals from the removed account must be gone")
+        XCTAssertEqual(v[0].topKeys[0].totalUSD, 4.0, accuracy: 0.001)
+    }
 }

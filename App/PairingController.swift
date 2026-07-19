@@ -126,17 +126,38 @@ final class PairingController: ObservableObject {
             state = .failed("Clipboard is empty — copy the key first, then click again")
             return
         }
-        let expectedPrefix = vendor == "anthropic" ? "sk-ant-admin" : "sk-or-"
-        let keyKind = vendor == "anthropic" ? "Anthropic ADMIN key (sk-ant-admin…)" : "OpenRouter management key (sk-or-…)"
+        let expectedPrefix: String
+        let keyKind: String
+        switch vendor {
+        case "anthropic": expectedPrefix = "sk-ant-admin"; keyKind = "Anthropic ADMIN key (sk-ant-admin…)"
+        case "openai": expectedPrefix = "sk-admin"; keyKind = "OpenAI ADMIN key (sk-admin…)"
+        default: expectedPrefix = "sk-or-"; keyKind = "OpenRouter management key (sk-or-…)"
+        }
         guard raw.hasPrefix(expectedPrefix) else {
-            state = .failed("Clipboard doesn't contain an \(keyKind)")
+            // Clipboard content is never echoed into the UI, NSLog, or sync_log —
+            // it may be a password or a key for another vendor (CLAUDE.md: keys
+            // never in SQLite/logs). Classify by known public prefixes only.
+            let kind: String
+            if raw.hasPrefix("sk-ant-admin") { kind = "an Anthropic admin key" }
+            else if raw.hasPrefix("sk-ant-") { kind = "a regular Anthropic API key" }
+            else if raw.hasPrefix("sk-or-") { kind = "an OpenRouter key" }
+            else if raw.hasPrefix("sk-admin") { kind = "an OpenAI admin key" }
+            else if raw.hasPrefix("sk-proj-") { kind = "an OpenAI project key" }
+            else if raw.hasPrefix("sk-") { kind = "an unrecognized sk-… key" }
+            else { kind = "not an API key" }
+            state = .failed("Clipboard doesn't contain an \(keyKind) — what's there looks like \(kind)")
+            logPairing(vendor: vendor, errorClass: "pairing",
+                       message: "probe(\(vendor)) rejected: clipboard looks like \(kind), expected \(expectedPrefix)…")
             return
         }
         state = .exchanging   // rendered as "Testing connection…"
         Task {
-            let provider: VendorProvider = vendor == "anthropic"
-                ? AnthropicProvider(accountID: "probe", credential: Credential(apiKey: raw))
-                : OpenRouterProvider(accountID: "probe", credential: Credential(apiKey: raw))
+            let provider: VendorProvider
+            switch vendor {
+            case "anthropic": provider = AnthropicProvider(accountID: "probe", credential: Credential(apiKey: raw))
+            case "openai": provider = OpenAIProvider(accountID: "probe", credential: Credential(apiKey: raw))
+            default: provider = OpenRouterProvider(accountID: "probe", credential: Credential(apiKey: raw))
+            }
             do {
                 _ = try await provider.fetchUsage(sinceDaysAgo: 2, now: Date())   // the call that needs the elevated key
                 try finishPairing(vendor: vendor, apiKey: raw, displayName: displayName, reconnectAccountID: nil)
@@ -148,10 +169,10 @@ final class PairingController: ObservableObject {
                 default: msg = "Connection test failed (\(e.errorClass)) — see Diagnostics"
                 }
                 state = .failed(msg)
-                logPairing(errorClass: "pairing", message: "probe(\(vendor)) failed: \(String(String(describing: e).prefix(120)))")
+                logPairing(vendor: vendor, errorClass: "pairing", message: "probe(\(vendor)) failed: \(String(String(describing: e).prefix(300)))")
             } catch {
                 state = .failed("Connection test failed — see Diagnostics")
-                logPairing(errorClass: "pairing", message: "probe(\(vendor)) failed: \(String(String(describing: error).prefix(120)))")
+                logPairing(vendor: vendor, errorClass: "pairing", message: "probe(\(vendor)) failed: \(String(String(describing: error).prefix(300)))")
             }
         }
     }
@@ -159,13 +180,13 @@ final class PairingController: ObservableObject {
     private func finishPairing(vendor: String, apiKey: String, displayName: String, reconnectAccountID: String?) throws {
         if let existingID = reconnectAccountID {
             try keychain.setKey(apiKey, accountID: existingID)   // re-key existing account
-            logPairing(errorClass: "ok", message: "re-keyed account \(existingID)")
+            logPairing(vendor: vendor, errorClass: "ok", message: "re-keyed account \(existingID)")
         } else {
             let accountID = "\(vendor)-\(UUID().uuidString.prefix(8))"
             try keychain.setKey(apiKey, accountID: accountID)
             try pairingStore().addAccount(id: accountID, vendor: vendor,
                                           displayName: displayName.isEmpty ? "personal" : displayName)
-            logPairing(errorClass: "ok", message: "added account \(accountID)")
+            logPairing(vendor: vendor, errorClass: "ok", message: "added account \(accountID)")
         }
         try? Data().write(to: paths.syncRequest)     // daemon syncs within ~5 s
         state = .done
@@ -182,9 +203,10 @@ final class PairingController: ObservableObject {
 
     /// Every pairing outcome lands in sync_log so the Diagnostics tab shows it —
     /// a silent pairing failure cost us a debugging round once already.
-    private func logPairing(errorClass: String, message: String) {
+    /// Default vendor covers the OpenRouter-only legacy paths (browser OAuth, paste).
+    private func logPairing(vendor: String = "openrouter", errorClass: String, message: String) {
         NSLog("LLMCostBar pairing [%@]: %@", errorClass, message)
-        try? (try? pairingStore())?.logSync(vendor: "openrouter", accountID: "-",
+        try? (try? pairingStore())?.logSync(vendor: vendor, accountID: "-",
                                             endpoint: "pairing", httpStatus: nil,
                                             errorClass: errorClass, message: message, snippet: nil)
     }
