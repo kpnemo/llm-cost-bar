@@ -1,0 +1,58 @@
+name: LLMCostBar
+options:
+  bundleIdPrefix: com.mikeb
+  deploymentTarget:
+    macOS: "14.0"
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    SWIFT_VERSION: "5.10"
+configFiles:
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
+packages:
+  LLMCostBarCore:
+    path: Core
+targets:
+  llmcostd:
+    type: tool
+    platform: macOS
+    sources: [Daemon]
+    dependencies:
+      - package: LLMCostBarCore
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: App/llmcostd.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.mikeb.llmcostd
+  LLMCostBar:
+    type: application
+    platform: macOS
+    sources: [App]
+    dependencies:
+      - package: LLMCostBarCore
+      - target: llmcostd
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: App/LLMCostBar.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.mikeb.LLMCostBar
+    info:
+      path: App/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: LLM Cost Bar
+        CFBundleURLTypes:
+          - CFBundleURLName: com.mikeb.LLMCostBar
+            CFBundleURLSchemes: [llmcostbar]
+    postBuildScripts:
+      - name: Embed LaunchAgent plist
+        script: |
+          mkdir -p "$CODESIGNING_FOLDER_PATH/Contents/Library/LaunchAgents"
+          cp "$SRCROOT/Resources/com.mikeb.llmcostd.plist" "$CODESIGNING_FOLDER_PATH/Contents/Library/LaunchAgents/"
