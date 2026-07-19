@@ -65,6 +65,16 @@ final class PairingController: ObservableObject {
         }
     }
 
+    /// Escape hatch: user gives up waiting for the browser (e.g. closed the tab, or
+    /// changed their mind). Discards the abandoned flow's pending state so a callback
+    /// that arrives later fails the `.waitingForBrowser` guard in handleCallback and is
+    /// ignored, and returns the Add-account UI to idle.
+    func cancelPairing() {
+        pendingVerifier = nil
+        reconnectAccountID = nil
+        state = .idle
+    }
+
     /// Fallback path: user pasted an API/provisioning key directly. Always creates/re-keys
     /// with no reconnect target — pasting is never used to complete a reconnect flow.
     func pasteKeyPairing(displayName: String, apiKey: String) {

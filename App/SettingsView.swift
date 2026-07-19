@@ -75,7 +75,11 @@ struct AccountsTab: View {
     @ViewBuilder private var pairingStatus: some View {
         switch pairing.state {
         case .idle: EmptyView()
-        case .waitingForBrowser: Label("Waiting for browser approval…", systemImage: "safari")
+        case .waitingForBrowser:
+            HStack {
+                Label("Waiting for browser approval…", systemImage: "safari")
+                Button("Cancel") { pairing.cancelPairing() }
+            }
         case .exchanging: Label("Exchanging code…", systemImage: "arrow.triangle.2.circlepath")
         case .done: Label("Connected — first sync running", systemImage: "checkmark.circle").foregroundStyle(.green)
         case .failed(let msg): Label(msg, systemImage: "xmark.circle").foregroundStyle(.red)
