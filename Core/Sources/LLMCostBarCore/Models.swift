@@ -34,7 +34,7 @@ public struct Credential: Sendable {
 }
 
 /// Error taxonomy drives sync behavior: transient → retry/backoff, auth → needs_reauth, decode → log loudly.
-public enum ProviderError: Error, Equatable {
+public enum ProviderError: Error, Equatable, Sendable {
     case transient(String)               // network, timeout, 429, 5xx
     case auth(Int, String)               // 401/403 — do NOT retry
     case http(Int, String)               // other unexpected status (snippet included)
@@ -51,6 +51,8 @@ public enum Day {
     /// Today's date as "yyyy-MM-dd" in UTC.
     public static func utcToday(now: Date = Date()) -> String {
         let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.calendar = Calendar(identifier: .gregorian)
         fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")
         return fmt.string(from: now)
     }
