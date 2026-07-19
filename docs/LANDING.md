@@ -6,15 +6,43 @@ no hype.
 
 ---
 
+## Application info (facts sheet)
+
+| | |
+| --- | --- |
+| **Product** | LLM Cost Bar |
+| **What it is** | macOS menu-bar app + background daemon that tracks LLM API spend across vendors |
+| **Version** | 1.0.0 (see the [latest release](https://github.com/kpnemo/llm-cost-bar/releases/latest) for current) |
+| **Platform** | macOS 14 (Sonoma) or newer, Apple Silicon & Intel |
+| **Price** | Free |
+| **License** | MIT (open source) |
+| **Distribution** | Developer ID-signed, Apple-notarized DMG via GitHub Releases (not on the Mac App Store) |
+| **Vendors supported** | OpenRouter, Anthropic, OpenAI (Gemini pending — Google has no spend API yet) |
+| **Requirements** | Your own vendor billing keys: OpenRouter management key, Anthropic Admin API key, OpenAI Admin API key |
+| **Privacy** | No backend, no telemetry, no account; keys in the macOS Keychain, data in a local SQLite DB |
+| **Author** | Mike (kpnemo) |
+
+**All links:**
+
+- Download (always the latest version): `https://github.com/kpnemo/llm-cost-bar/releases/latest/download/LLMCostBar.dmg`
+- Releases page: `https://github.com/kpnemo/llm-cost-bar/releases`
+- GitHub repo: `https://github.com/kpnemo/llm-cost-bar`
+- Privacy policy: `https://github.com/kpnemo/llm-cost-bar/blob/main/PRIVACY.md`
+- License: `https://github.com/kpnemo/llm-cost-bar/blob/main/LICENSE`
+- Download counter badge (embeddable image): `https://img.shields.io/github/downloads/kpnemo/llm-cost-bar/total?color=2ea44f&label=downloads`
+- Sibling app by the same author: `https://github.com/kpnemo/polish-my-writing`
+
+---
+
 ## Hero
 
 **Name:** LLM Cost Bar
 
-**Tagline:** Know what your AI is costing you. Right now, in your menu bar.
+**Tagline:** Today's LLM API spend, live in your macOS menu bar.
 
-**Subtitle:** One glance shows today's burn and month-to-date across
-OpenRouter, Anthropic, and OpenAI — with live charts, credit balances, and
-per-API-key breakdowns. Free, open source, no backend.
+**Subtitle:** Track today's burn and month-to-date spend across OpenRouter,
+Anthropic, and OpenAI, with live charts, credit balances, and per-API-key
+breakdowns. Free, open source, no backend.
 
 **Primary CTA button:** Download for macOS
 → `https://github.com/kpnemo/llm-cost-bar/releases/latest/download/LLMCostBar.dmg`
@@ -32,43 +60,43 @@ per-API-key breakdowns. Free, open source, no backend.
 ## The problem (one short paragraph)
 
 You have API keys at three vendors, agents running overnight, and a credit
-balance quietly draining. The vendor dashboards are three logins away and
-none of them show *today*. By the time the invoice email arrives, the
-interesting question — *what* burned the money — is a spreadsheet job.
+balance draining quietly. Their dashboards are three logins away, and none
+shows *today*. When the invoice email arrives, answering *what* burned the
+money is a spreadsheet job.
 
 ## The answer (one line)
 
-A menu bar number that's never more than a few minutes stale, and a dropdown
-that answers "which vendor, which key, which day" in two clicks.
+A menu bar number, never more than a few minutes stale, plus a dropdown that
+answers "which vendor, which key, which day" in two clicks.
 
 ---
 
 ## Feature blocks (icon + heading + 1–2 sentences each)
 
-1. **Today, live** — Not yesterday's report. A background daemon polls the
-   vendor APIs on your schedule and shows today's spend as it happens,
-   including a live delta for vendors whose activity feeds lag.
+1. **Today, live** — Not yesterday's report. A background daemon polls vendor
+   APIs on your schedule, showing today's spend as it happens. For vendors
+   with lagging activity feeds, a live delta keeps the number current.
 
-2. **Every vendor, one panel** — OpenRouter, Anthropic, and OpenAI cards with
-   month-to-date, credits progress, and a 30-day bar chart. Hover any bar for
-   that day's exact spend.
+2. **Every vendor, one panel** — One panel holds OpenRouter, Anthropic, and
+   OpenAI cards, each with month-to-date, credits progress, and a 30-day bar
+   chart. Hover any bar for that day's exact spend.
 
-3. **Which key is burning?** — Per-key spend for each vendor: real dollars
-   from OpenRouter and OpenAI, smart token-weighted estimates for Anthropic
-   (which exposes no per-key cost API — the estimates always sum to the true
-   total).
+3. **Which key is burning?** — Per-key spend for every vendor: real dollars
+   from OpenRouter and OpenAI, and token-weighted estimates for Anthropic.
+   Anthropic exposes no per-key cost API; its estimates always sum to the true
+   total.
 
-4. **Private by design** — No backend, no telemetry, no account. Keys live in
-   the macOS Keychain; data flows straight from vendor APIs to a local SQLite
-   file. The repo is open — check.
+4. **Private by design** — No backend. No telemetry. No account. Keys stay in
+   the macOS Keychain; data flows directly from vendor APIs to a local SQLite
+   file. The repo is open — inspect it.
 
 5. **Survives everything** — A launchd-supervised daemon keeps collecting
-   through app crashes, restarts, and sleep. Every sync attempt lands in a
-   Diagnostics view; nothing fails silently.
+   through app crashes, restarts, and sleep. Every sync attempt appears in
+   Diagnostics, so nothing fails silently.
 
-6. **Set up in a minute** — Paste one management/admin key per vendor and
-   you're done. The app live-tests the key before storing it, with pointed
-   error messages when a vendor hands you the wrong kind of key.
+6. **Set up in a minute** — Paste one management/admin key per vendor. The app
+   live-tests each key before storing it and gives a pointed error when a
+   vendor hands you the wrong kind.
 
 ---
 
