@@ -59,6 +59,7 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(v.monthUSD, 61.20, accuracy: 0.001)
         XCTAssertEqual(v.balanceUSD, 38.50)
         XCTAssertEqual(v.topKeys.first?.apiKeyID, "claude-code") // ranked by today's spend
+        XCTAssertEqual(v.topKeys.first?.accountID, "acc1")
         XCTAssertEqual(v.topKeys.first?.todayUSD ?? 0, 1.40, accuracy: 0.001)
     }
 
@@ -77,5 +78,26 @@ final class UsageStoreTests: XCTestCase {
         try store.addAccount(id: "acc1", vendor: "openrouter", displayName: "personal")
         try store.setNeedsReauth(accountID: "acc1", value: true)
         XCTAssertTrue(try store.accounts()[0].needsReauth)
+    }
+
+    func testRemoveAccountCascades() throws {
+        let store = UsageStore(db: try makeDB())
+        try seed(store)
+        try store.removeAccount(id: "acc1")
+        XCTAssertTrue(try store.accounts().isEmpty)
+        let s = try store.summary(today: "2026-07-19", monthPrefix: "2026-07")
+        XCTAssertEqual(s.todayUSD, 0, accuracy: 0.001)
+        XCTAssertEqual(s.monthUSD, 0, accuracy: 0.001)
+        XCTAssertTrue(try store.vendorSummaries(today: "2026-07-19", monthPrefix: "2026-07").isEmpty)
+    }
+
+    func testMarkSyncOKClearsNeedsReauth() throws {
+        let store = UsageStore(db: try makeDB())
+        try store.addAccount(id: "acc1", vendor: "openrouter", displayName: "personal")
+        try store.setNeedsReauth(accountID: "acc1", value: true)
+        try store.markSyncOK(accountID: "acc1")
+        let account = try store.accounts()[0]
+        XCTAssertFalse(account.needsReauth)
+        XCTAssertNotNil(account.lastSyncOK)
     }
 }

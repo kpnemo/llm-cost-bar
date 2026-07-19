@@ -7,7 +7,8 @@ public struct Summary: Equatable, Sendable {
     public init(todayUSD: Double, monthUSD: Double) { self.todayUSD = todayUSD; self.monthUSD = monthUSD }
 }
 
-public struct KeySpend: Equatable, Sendable {
+public struct KeySpend: Equatable, Hashable, Sendable {
+    public var accountID: String
     public var apiKeyID: String
     public var todayUSD: Double
 }
@@ -133,10 +134,10 @@ public final class UsageStore: Sendable {
                 let bal = try Double.fetchOne(db, sql: "SELECT SUM(balance_usd) FROM balances WHERE vendor = ?",
                                               arguments: [vendor])
                 let keys = try Row.fetchAll(db, sql: """
-                    SELECT api_key_id, COALESCE(SUM(cost_usd),0) AS c FROM usage_daily
-                    WHERE vendor = ? AND day = ? GROUP BY api_key_id ORDER BY c DESC LIMIT 5
+                    SELECT account_id, api_key_id, COALESCE(SUM(cost_usd),0) AS c FROM usage_daily
+                    WHERE vendor = ? AND day = ? GROUP BY account_id, api_key_id ORDER BY c DESC LIMIT 5
                     """, arguments: [vendor, today])
-                    .map { KeySpend(apiKeyID: $0["api_key_id"], todayUSD: $0["c"]) }
+                    .map { KeySpend(accountID: $0["account_id"], apiKeyID: $0["api_key_id"], todayUSD: $0["c"]) }
                 return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, balanceUSD: bal, topKeys: keys)
             }
         }
