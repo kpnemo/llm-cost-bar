@@ -22,4 +22,13 @@ final class AppConfigTests: XCTestCase {
         try "not json".data(using: .utf8)!.write(to: url)
         XCTAssertEqual(AppConfig.load(from: url).refreshMinutes, 15)
     }
+
+    func testLast30DaysDisplayRoundTrips() throws {
+        var cfg = AppConfig()
+        cfg.menuBarDisplay = .last30Days
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cfg-\(UUID().uuidString).json")
+        try cfg.save(to: url)
+        XCTAssertEqual(AppConfig.load(from: url).menuBarDisplay, .last30Days)
+    }
 }

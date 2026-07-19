@@ -2,10 +2,6 @@ import XCTest
 @testable import LLMCostBarCore
 
 final class KeyTotalAggregateTests: XCTestCase {
-    private func utcDate(_ iso: String) -> Date {
-        ISO8601DateFormatter().date(from: iso)!
-    }
-
     /// now = 2026-07-25T12:00:00Z → "today" is 2026-07-25, MTD floor is 2026-07-01.
     private let now = ISO8601DateFormatter().date(from: "2026-07-25T12:00:00Z")!
 

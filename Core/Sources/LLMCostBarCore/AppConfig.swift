@@ -1,7 +1,7 @@
 import Foundation
 
 public enum MenuBarDisplay: String, Codable, CaseIterable, Sendable {
-    case iconOnly, today, monthToDate
+    case iconOnly, today, monthToDate, last30Days
 }
 
 public struct AppConfig: Codable, Equatable, Sendable {
