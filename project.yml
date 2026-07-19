@@ -47,6 +47,7 @@ targets:
       properties:
         LSUIElement: true
         CFBundleDisplayName: LLM Cost Bar
+        CFBundleIconFile: AppIcon
         CFBundleURLTypes:
           - CFBundleURLName: com.mikeb.LLMCostBar
             CFBundleURLSchemes: [llmcostbar]
@@ -55,3 +56,8 @@ targets:
         script: |
           mkdir -p "$CODESIGNING_FOLDER_PATH/Contents/Library/LaunchAgents"
           cp "$SRCROOT/Resources/com.mikeb.llmcostd.plist" "$CODESIGNING_FOLDER_PATH/Contents/Library/LaunchAgents/"
+      - name: Embed AppIcon
+        script: |
+          if [ -f "$SRCROOT/Resources/AppIcon.icns" ]; then
+            cp "$SRCROOT/Resources/AppIcon.icns" "$CODESIGNING_FOLDER_PATH/Contents/Resources/AppIcon.icns"
+          fi
