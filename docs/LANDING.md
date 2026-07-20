@@ -11,14 +11,14 @@ no hype.
 | | |
 | --- | --- |
 | **Product** | LLM Cost Bar |
-| **What it is** | macOS menu-bar app + background daemon that tracks LLM API spend across vendors |
-| **Version** | 1.0.0 (see the [latest release](https://github.com/kpnemo/llm-cost-bar/releases/latest) for current) |
+| **What it is** | macOS menu-bar app + background daemon that tracks LLM API spend and subscription limits across vendors |
+| **Version** | 1.2.0 (see the [latest release](https://github.com/kpnemo/llm-cost-bar/releases/latest) for current) |
 | **Platform** | macOS 14 (Sonoma) or newer, Apple Silicon & Intel |
 | **Price** | Free |
 | **License** | MIT (open source) |
 | **Distribution** | Developer ID-signed, Apple-notarized DMG via GitHub Releases (not on the Mac App Store) |
-| **Vendors supported** | OpenRouter, Anthropic, OpenAI (Gemini pending — Google has no spend API yet) |
-| **Requirements** | Your own vendor billing keys: OpenRouter management key, Anthropic Admin API key, OpenAI Admin API key |
+| **Vendors supported** | API spend: OpenRouter, Anthropic, OpenAI. Subscription limits: Claude Pro/Max (via Claude Code), ChatGPT Plus/Pro (via Codex CLI). Gemini pending — Google has no spend API yet |
+| **Requirements** | For API spend: your own vendor billing keys (OpenRouter management key, Anthropic Admin API key, OpenAI Admin API key). For subscription limits: no keys at all — just Claude Code and/or Codex CLI signed in on the same Mac |
 | **Privacy** | No backend, no telemetry, no account; keys in the macOS Keychain, data in a local SQLite DB |
 | **Author** | Mike (kpnemo) |
 
@@ -38,11 +38,12 @@ no hype.
 
 **Name:** LLM Cost Bar
 
-**Tagline:** Today's LLM API spend, live in your macOS menu bar.
+**Tagline:** Your LLM spend *and* limits, live in your macOS menu bar.
 
-**Subtitle:** Track today's burn and month-to-date spend across OpenRouter,
-Anthropic, and OpenAI, with live charts, credit balances, and per-API-key
-breakdowns. Free, open source, no backend.
+**Subtitle:** Track today's API burn across OpenRouter, Anthropic, and OpenAI —
+and your Claude Pro/Max and ChatGPT session/weekly limits with reset
+countdowns. Live charts, credit balances, per-API-key breakdowns. Free, open
+source, no backend.
 
 **Primary CTA button:** Download for macOS
 → `https://github.com/kpnemo/llm-cost-bar/releases/latest/download/LLMCostBar.dmg`
@@ -62,12 +63,15 @@ breakdowns. Free, open source, no backend.
 You have API keys at three vendors, agents running overnight, and a credit
 balance draining quietly. Their dashboards are three logins away, and none
 shows *today*. When the invoice email arrives, answering *what* burned the
-money is a spreadsheet job.
+money is a spreadsheet job. And if you're on Claude Max or ChatGPT Plus
+instead, the question is worse: *how much of my week is left?* — answerable
+only by typing `/usage` into a terminal.
 
 ## The answer (one line)
 
 A menu bar number, never more than a few minutes stale, plus a dropdown that
-answers "which vendor, which key, which day" in two clicks.
+answers "which vendor, which key, which day" — and "how close am I to the
+cap, and when does it reset" — in two clicks.
 
 ---
 
@@ -83,32 +87,58 @@ answers "which vendor, which key, which day" in two clicks.
 
 3. **Which key is burning?** — Per-key spend for every vendor: real dollars
    from OpenRouter and OpenAI, and token-weighted estimates for Anthropic.
-   Anthropic exposes no per-key cost API; its estimates always sum to the true
-   total.
+   Every key row shows three columns — today, month-to-date, trailing 30
+   days — aligned under the vendor's own totals. Anthropic exposes no
+   per-key cost API; its estimates always sum to the true total.
 
-4. **Private by design** — No backend. No telemetry. No account. Keys stay in
+4. **Subscription limits, not just dollars** — On Claude Max or ChatGPT Plus?
+   A second tab shows every rolling limit window — Claude's 5-hour session
+   and weekly caps (per-model too), Codex's weekly window — as color-coded
+   bars with exact reset times ("61% — resets Thu 09:00 · in 2d 3h").
+
+5. **Zero-setup detection** — No keys to paste. If Claude Code or Codex CLI
+   is signed in on your Mac, the app finds it and reuses that sign-in
+   *read-only* (one "Always Allow" Keychain click for Claude, nothing for
+   Codex). It never refreshes or touches the CLI's tokens.
+
+6. **Know before you hit the wall** — A macOS notification fires when any
+   window crosses your threshold (default 80%, configurable), re-arming after
+   each reset. A 7-day burn-rate sparkline shows whether the week's budget
+   will last until Friday.
+
+7. **Private by design** — No backend. No telemetry. No account. Keys stay in
    the macOS Keychain; data flows directly from vendor APIs to a local SQLite
    file. The repo is open — inspect it.
 
-5. **Survives everything** — A launchd-supervised daemon keeps collecting
+8. **Survives everything** — A launchd-supervised daemon keeps collecting
    through app crashes, restarts, and sleep. Every sync attempt appears in
    Diagnostics, so nothing fails silently.
 
-6. **Set up in a minute** — Paste one management/admin key per vendor. The app
+9. **Set up in a minute** — Paste one management/admin key per vendor. The app
    live-tests each key before storing it and gives a pointed error when a
-   vendor hands you the wrong kind.
+   vendor hands you the wrong kind. Subscriptions need no setup at all:
+   they're auto-detected.
 
 ---
 
 ## Screenshots to capture (assets for the page)
 
 1. **Hero shot:** dropdown open over a desktop — three vendor cards collapsed,
-   header "Today $2.16 / MTD $73.33", vendor favicons visible.
-2. **Expanded card:** Anthropic card with the 30-day chart mid-hover
-   ("Jul 12 · $3.41" readout) and the per-key spend list.
-3. **Menu bar close-up:** just the icon + today's number in the menu bar.
-4. **Credits bar:** OpenRouter card showing the color-coded credits progress
+   header "Today $2.16 / MTD $73.33", vendor favicons and the
+   "API Spend | Subscriptions" switcher visible.
+2. **Subscriptions tab (co-hero for the subscriber audience):** popover on the
+   Subscriptions tab — Claude card (Max badge, 5-hour + 7-day bars, one
+   yellow/red bar, reset countdowns, sparkline) above the Codex card.
+3. **Expanded card:** Anthropic card with the 30-day chart mid-hover
+   ("Jul 12 · $3.41" readout) and the three-column per-key spend list
+   (today | MTD | 30d).
+4. **Menu bar close-up:** just the icon + today's number in the menu bar.
+5. **Credits bar:** OpenRouter card showing the color-coded credits progress
    ("$9.47 left of $80.00 · 88% used").
+6. **Threshold notification:** the macOS banner ("Claude 7-day window at 85%
+   of limit").
+7. **Settings → Accounts:** the "Subscriptions (auto-detected)" section with
+   the Claude/Codex toggles.
 
 ---
 
@@ -133,6 +163,26 @@ See PRIVACY.md in the repo.
 The background daemon is a separate binary from the app, and macOS grants
 Keychain access per item — so you approve each newly added key once. Click
 "Always Allow" and you won't be asked again for that key.
+
+**I don't use API keys, just Claude Max / ChatGPT Plus. Is this for me?**
+Yes — that's exactly what the Subscriptions tab is for. Skip the API-key
+setup entirely; if Claude Code or Codex CLI is signed in on your Mac, your
+limits appear automatically.
+
+**How does it read my Claude limits? Is that safe?**
+It reuses the sign-in Claude Code already stores in your macOS Keychain —
+read-only, never modified or refreshed, never sent anywhere except
+Anthropic's own API (the same endpoint Claude Code's `/usage` command
+calls). macOS asks once; click "Always Allow". If you'd rather not, one
+toggle turns the whole source off. Honest caveat: the limit endpoints are
+unofficial (the same ones the vendors' own CLIs use) — if a vendor changes
+them, cards show last-known data marked stale until an app update; spend
+tracking is unaffected.
+
+**What are "windows" and why do the bars reset?**
+Claude Pro/Max and ChatGPT meter usage in rolling windows (Claude: 5-hour
+session + 7-day; ChatGPT/Codex: weekly). Each bar is one window: percent
+used, plus exactly when it resets.
 
 **Gemini?**
 Waiting on Google — AI Studio has spend dashboards but no API to read them.
@@ -159,6 +209,11 @@ DMG straight from GitHub Releases.
 
 - Single page, dark theme first (the app is a dark menu bar dropdown — match
   it; accent color from the app's blue chart bars).
+- Two audiences, one CTA: consider a split high on the page — "Pay per
+  token?" → API spend blocks / "Pay monthly?" → subscription blocks —
+  converging on the same download button.
+- The subscription bars introduce green/yellow/red as semantic colors; use
+  them only inside limit-bar imagery, keep the page accent blue.
 - The hero screenshot IS the product — make it large and real, not a stylized
   mockup.
 - Keep the download button visible without scrolling; repeat it after the
