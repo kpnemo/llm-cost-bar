@@ -91,44 +91,70 @@ enum UpdateInstaller {
             throw error
         }
 
-        // 7. One-shot marker so the new instance can show "✓ Updated to vX.Y.Z".
+        // 7. Restart the daemon NOW, from the new bundle (the LaunchAgent plist
+        //    points at the fixed bundle path, so this launches the new binary).
+        //    Doing it before the app relaunch means every post-swap outcome —
+        //    including a failed relaunch — leaves a live daemon.
+        DaemonManager.ensure(heartbeatURL: paths.heartbeat, force: true)
+
+        // 8. One-shot marker so the new instance can show "✓ Updated to vX.Y.Z".
         try? Data(release.version.utf8).write(to: paths.updateInstalledMark)
         log.info("installed v\(release.version) at \(dest.path)")
         return dest
     }
 
-    /// Spawns a detached relauncher and exits. `open -n` starts the NEW binary
-    /// after the 1 s sleep gives this process time to fully terminate.
-    static func relaunchAndQuit(bundleAt url: URL) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", "sleep 1; /usr/bin/open -n '\(url.path)'"]
-        try? p.run()
-        NSApp.terminate(nil)
+    /// Launches the freshly installed bundle and terminates this process only
+    /// once the new instance is confirmed running. A brief two-instance overlap
+    /// is harmless (menu-bar app); a silent no-app outcome is not — on failure
+    /// the old instance stays alive and reports instead of exiting blind.
+    static func relaunchAndQuit(bundleAt url: URL, onFailure: @escaping @MainActor (String) -> Void) {
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { app, error in
+            DispatchQueue.main.async {
+                if app != nil {
+                    NSApp.terminate(nil)
+                } else {
+                    log.error("relaunch failed: \(String(describing: error))")
+                    onFailure("update installed, but relaunch failed — please quit and reopen the app")
+                }
+            }
+        }
     }
 
     // MARK: - helpers
 
+    /// Streamed download straight to disk; progress comes from the task's own
+    /// Progress object (handles the GitHub → objects.githubusercontent redirect
+    /// and unknown lengths for free).
     private static func download(_ url: URL, to dest: URL,
                                  progress: @escaping @Sendable (Double) -> Void) async throws {
-        let (bytes, response) = try await URLSession.shared.bytes(from: url)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else { throw InstallError.step("download failed (HTTP \(status))") }
-        let expected = response.expectedContentLength   // -1 if unknown
-        var data = Data()
-        if expected > 0 { data.reserveCapacity(Int(expected)) }
-        var lastReported = -1
-        for try await byte in bytes {
-            data.append(byte)
-            if expected > 0 {
-                let pct = Int(Double(data.count) / Double(expected) * 100)
-                if pct != lastReported {   // throttle: at most one UI hop per percent
-                    lastReported = pct
-                    progress(Double(pct) / 100)
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            var observation: NSKeyValueObservation?
+            let task = URLSession.shared.downloadTask(with: url) { tmp, response, error in
+                observation?.invalidate()
+                observation = nil
+                if let error {
+                    return cont.resume(throwing: InstallError.step("download failed: \(error.localizedDescription)"))
+                }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200, let tmp else {
+                    return cont.resume(throwing: InstallError.step("download failed (HTTP \(status))"))
+                }
+                do {
+                    // Must move before this handler returns — URLSession deletes tmp after.
+                    try? FileManager.default.removeItem(at: dest)
+                    try FileManager.default.moveItem(at: tmp, to: dest)
+                    cont.resume()
+                } catch {
+                    cont.resume(throwing: InstallError.step("saving download: \(error.localizedDescription)"))
                 }
             }
+            observation = task.progress.observe(\.fractionCompleted) { p, _ in
+                progress(p.fractionCompleted)
+            }
+            task.resume()
         }
-        try data.write(to: dest)
     }
 
     /// Runs a tool to completion, capturing stdout+stderr. Non-zero exit → error

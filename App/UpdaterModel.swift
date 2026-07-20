@@ -84,6 +84,10 @@ final class UpdaterModel: ObservableObject {
         }
         lastCheck = Date()
         if manual, case .checking = phase { phase = .idle }
+        // A completed check refreshes availableRelease, so a lingering .failed
+        // would pair a "Retry" row with possibly-stale (or nil) release info —
+        // a dead end. Fresh check result → fresh state.
+        if case .failed = phase { phase = .idle }
     }
 
     /// One click: download → verify → swap → relaunch. Any failure lands in
@@ -108,7 +112,11 @@ final class UpdaterModel: ObservableObject {
                     onInstalling: {
                         Task { @MainActor [weak self] in self?.phase = .installing }
                     })
-                UpdateInstaller.relaunchAndQuit(bundleAt: installedAt)
+                UpdateInstaller.relaunchAndQuit(bundleAt: installedAt) { [weak self] message in
+                    // New version is installed and the daemon is already running
+                    // from it; only this instance's handoff failed.
+                    self?.phase = .failed(message)
+                }
             } catch {
                 phase = .failed(shortError(error))
             }
