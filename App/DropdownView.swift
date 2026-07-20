@@ -7,31 +7,24 @@ struct DropdownView: View {
     @EnvironmentObject var pairing: PairingController
     @Environment(\.openSettings) private var openSettings
     @State private var collapsed: Set<String> = []
+    @State private var tab: PopoverTab = .apiSpend
+    @State private var tabSeeded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Today \(usd(model.summary.todayUSD))")
-                    .font(.title2.weight(.semibold))
-                Spacer()
-                Text("MTD \(usd(model.summary.monthUSD))")
-                    .font(.title3).foregroundStyle(.secondary)
-            }
+            header
 
-            ForEach(model.vendors, id: \.vendor) { v in
-                VendorCard(vendor: v,
-                           account: model.accounts.first { $0.vendor == v.vendor },
-                           series: model.series[v.vendor] ?? [],
-                           isCollapsed: collapsed.contains(v.vendor),
-                           toggle: {
-                               if collapsed.contains(v.vendor) { collapsed.remove(v.vendor) }
-                               else { collapsed.insert(v.vendor) }
-                           })
+            Picker("Tab", selection: $tab) {
+                Text("API Spend").tag(PopoverTab.apiSpend)
+                Text("Subscriptions").tag(PopoverTab.subscriptions)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
-            if model.vendors.isEmpty {
-                Text("No accounts connected — open Settings to pair OpenRouter.")
-                    .foregroundStyle(.secondary).font(.body)
+            if tab == .apiSpend {
+                apiSpendContent
+            } else {
+                SubscriptionsSection()
             }
 
             Divider()
@@ -48,6 +41,61 @@ struct DropdownView: View {
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.pairing = pairing
             model.refresh()
+            // Seed once per app run so switching tabs mid-session sticks, but
+            // every popover open starts on the user's configured default.
+            if !tabSeeded {
+                tabSeeded = true
+                tab = model.config.defaultTab
+            }
+        }
+    }
+
+    @ViewBuilder private var header: some View {
+        if tab == .apiSpend {
+            HStack {
+                Text("Today \(usd(model.summary.todayUSD))")
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                Text("MTD \(usd(model.summary.monthUSD))")
+                    .font(.title3).foregroundStyle(.secondary)
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Subscriptions").font(.title2.weight(.semibold))
+                Spacer()
+                if let next = nextReset {
+                    Text("next reset in \(countdown(to: next))")
+                        .font(.title3).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// Soonest upcoming window reset across all enabled subscription sources.
+    private var nextReset: Date? {
+        let enabled = Set(model.subscriptionSources.filter(\.enabled).map(\.source))
+        return model.subscriptionWindows
+            .filter { enabled.contains($0.source) }
+            .compactMap { $0.resetsAt.flatMap(parseISO) }
+            .filter { $0 > Date() }
+            .min()
+    }
+
+    @ViewBuilder private var apiSpendContent: some View {
+        ForEach(model.vendors, id: \.vendor) { v in
+            VendorCard(vendor: v,
+                       account: model.accounts.first { $0.vendor == v.vendor },
+                       series: model.series[v.vendor] ?? [],
+                       isCollapsed: collapsed.contains(v.vendor),
+                       toggle: {
+                           if collapsed.contains(v.vendor) { collapsed.remove(v.vendor) }
+                           else { collapsed.insert(v.vendor) }
+                       })
+        }
+
+        if model.vendors.isEmpty {
+            Text("No accounts connected — open Settings to pair OpenRouter.")
+                .foregroundStyle(.secondary).font(.body)
         }
     }
 

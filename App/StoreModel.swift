@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UserNotifications
 import LLMCostBarCore
 
 @MainActor
@@ -11,6 +12,10 @@ final class StoreModel: ObservableObject {
     @Published var config = AppConfig()
     @Published var lastHeartbeat: Date?
     @Published var series: [String: [DayCost]] = [:]
+    @Published var subscriptionSources: [SubscriptionSourceRow] = []
+    @Published var subscriptionWindows: [SubscriptionWindowRow] = []
+    @Published var subscriptionSeries: [String: [SubscriptionPoint]] = [:]
+    private var notificationAuthRequested = false
 
     let paths = AppPaths.resolve()
     let store: UsageStore
@@ -60,6 +65,34 @@ final class StoreModel: ObservableObject {
             ($0.vendor, (try? store.dailyCosts(vendor: $0.vendor, sinceDay: since)) ?? [])
         })
         lastHeartbeat = (try? FileManager.default.attributesOfItem(atPath: paths.heartbeat.path)[.modificationDate]) as? Date
+
+        subscriptionSources = (try? store.subscriptionSources()) ?? subscriptionSources
+        subscriptionWindows = (try? store.latestSubscriptionWindows()) ?? subscriptionWindows
+        subscriptionSeries = Dictionary(uniqueKeysWithValues: subscriptionSources.map { src in
+            // Sparkline tracks the weekly window: claude seven_day, codex primary.
+            let weekly = src.source == SubscriptionSource.claude ? "seven_day" : "primary"
+            return (src.source, (try? store.subscriptionSeries(source: src.source, windowID: weekly)) ?? [])
+        })
+        deliverPendingAlerts()
+    }
+
+    /// Daemon detects threshold crossings and writes alert_events; only the app
+    /// can post user notifications (llmcostd is a bare tool, no bundle for the
+    /// permission dialog). The 30 s refresh doubles as the delivery pump.
+    private func deliverPendingAlerts() {
+        guard let pending = try? store.undeliveredAlertEvents(), !pending.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        if !notificationAuthRequested {
+            notificationAuthRequested = true
+            center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
+        for alert in pending {
+            let content = UNMutableNotificationContent()
+            content.title = "LLM Cost Bar"
+            content.body = alert.message
+            center.add(UNNotificationRequest(identifier: "alert-\(alert.id)", content: content, trigger: nil))
+            try? store.markAlertDelivered(id: alert.id)
+        }
     }
 
     var daemonHealthy: Bool {

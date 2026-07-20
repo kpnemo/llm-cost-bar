@@ -69,6 +69,14 @@ public struct SubscriptionWindowRow: Equatable, Hashable, Sendable {
     public var origin: String
 }
 
+public extension SubscriptionWindowRow {
+    /// Same label logic as SubscriptionWindow so alerts and cards agree.
+    var label: String {
+        SubscriptionWindow(windowID: windowID, usedPercent: usedPercent,
+                           resetsAt: nil, windowMinutes: windowMinutes).label
+    }
+}
+
 public struct SubscriptionPoint: Equatable, Hashable, Sendable {
     public var bucketStart: Date
     public var usedPercent: Double

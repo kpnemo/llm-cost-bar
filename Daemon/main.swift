@@ -40,16 +40,24 @@ let engine = SyncEngine(store: store, paths: paths,
                             (try? keychain.getKey(accountID: id)).flatMap { $0 }.map { Credential(apiKey: $0) }
                         })
 
+let subscriptionEngine = SubscriptionSyncEngine(
+    store: store,
+    providers: [ClaudeSubscriptionProvider(), CodexSubscriptionProvider()],
+    alertThreshold: { AppConfig.load(from: paths.config).subscriptionAlertThreshold })
+
 let appBundleID = AppIDs.app
 var lastSync = Date.distantPast
+var lastSubscriptionSync = Date.distantPast
 var lastRelaunchAttempt = Date.distantPast
+/// Subscription polls are cheap and decoupled from refreshMinutes.
+let subscriptionInterval: Double = 5 * 60
 
-func syncIsDue(config: AppConfig) -> Bool {
-    if FileManager.default.fileExists(atPath: paths.syncRequest.path) {
-        try? FileManager.default.removeItem(at: paths.syncRequest)   // consume trigger
-        return true
-    }
-    return Date().timeIntervalSince(lastSync) >= Double(config.refreshMinutes) * 60
+/// Consume the app's sync-request trigger file once per tick; the result fans
+/// out to both engines so a manual "sync now" refreshes subscriptions too.
+func consumeSyncTrigger() -> Bool {
+    guard FileManager.default.fileExists(atPath: paths.syncRequest.path) else { return false }
+    try? FileManager.default.removeItem(at: paths.syncRequest)
+    return true
 }
 
 /// Relaunch the app only if it is not running AND it did not exit cleanly
@@ -74,9 +82,14 @@ log.info("llmcostd started, home: \(paths.base.path, privacy: .public)")
 Task {
     while true {
         let config = AppConfig.load(from: paths.config)
-        if syncIsDue(config: config) {
+        let triggered = consumeSyncTrigger()
+        if triggered || Date().timeIntervalSince(lastSync) >= Double(config.refreshMinutes) * 60 {
             lastSync = Date()
             await engine.syncAll()
+        }
+        if triggered || Date().timeIntervalSince(lastSubscriptionSync) >= subscriptionInterval {
+            lastSubscriptionSync = Date()
+            await subscriptionEngine.syncAll()
         }
         watchdog(config: config)
         try? Data().write(to: paths.heartbeat)
