@@ -40,6 +40,26 @@ final class AppConfigTests: XCTestCase {
         XCTAssertTrue(cfg.autoCheckUpdates)
     }
 
+    /// Vendor cards are collapsed by default; the user's expansions persist.
+    func testExpandedVendorsDefaultsEmptyAndRoundTrips() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cfg-\(UUID().uuidString).json")
+        XCTAssertEqual(AppConfig.load(from: url).expandedVendors, [])   // default: all collapsed
+        var cfg = AppConfig()
+        cfg.expandedVendors = ["anthropic", "openrouter"]
+        try cfg.save(to: url)
+        XCTAssertEqual(AppConfig.load(from: url).expandedVendors, ["anthropic", "openrouter"])
+    }
+
+    func testOldConfigWithoutExpandedVendorsDecodesToCollapsed() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cfg-\(UUID().uuidString).json")
+        try #"{"refreshMinutes":45}"#.data(using: .utf8)!.write(to: url)
+        let cfg = AppConfig.load(from: url)
+        XCTAssertEqual(cfg.refreshMinutes, 45)
+        XCTAssertEqual(cfg.expandedVendors, [])
+    }
+
     func testAutoCheckUpdatesRoundTrip() throws {
         var cfg = AppConfig()
         cfg.autoCheckUpdates = false

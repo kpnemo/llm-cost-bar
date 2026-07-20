@@ -6,6 +6,12 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-07-21
+
+### Changed
+- Vendor cards in the popover now start **collapsed** and remember which ones
+  you expand — the choice persists across popover opens and app restarts.
+
 ## [1.3.0] - 2026-07-21
 
 ### Added

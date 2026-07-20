@@ -15,6 +15,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var defaultTab: PopoverTab = .apiSpend
     public var subscriptionAlertThreshold: Int = 80   // % used that triggers a notification
     public var autoCheckUpdates: Bool = true
+    /// Vendor cards the user expanded in the popover; everything else renders
+    /// collapsed. Empty (the default) = all collapsed.
+    public var expandedVendors: [String] = []
 
     public init() {}
 
@@ -30,6 +33,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         defaultTab = (try? c.decodeIfPresent(PopoverTab.self, forKey: .defaultTab)) ?? nil ?? .apiSpend
         subscriptionAlertThreshold = (try? c.decodeIfPresent(Int.self, forKey: .subscriptionAlertThreshold)) ?? nil ?? 80
         autoCheckUpdates = (try? c.decodeIfPresent(Bool.self, forKey: .autoCheckUpdates)) ?? nil ?? true
+        expandedVendors = (try? c.decodeIfPresent([String].self, forKey: .expandedVendors)) ?? nil ?? []
     }
 
     /// Missing or corrupt file → defaults. Never throws: prefs must not brick either process.
