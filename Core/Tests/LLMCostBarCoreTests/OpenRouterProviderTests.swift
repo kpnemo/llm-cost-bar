@@ -18,6 +18,13 @@ final class FakeHTTP: HTTPClient, @unchecked Sendable {
     func post(_ url: URL, json: [String: String]) async throws -> (Data, Int) {
         try await get(url, bearer: "")
     }
+    /// Header-aware variant records what was sent so tests can assert on the
+    /// load-bearing subscription headers (anthropic-beta, User-Agent, account id).
+    var recordedHeaders: [String: String] = [:]
+    func get(_ url: URL, headers: [String: String]) async throws -> (Data, Int) {
+        recordedHeaders = headers
+        return try await get(url, bearer: "")
+    }
 }
 
 final class OpenRouterProviderTests: XCTestCase {

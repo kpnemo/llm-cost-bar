@@ -86,6 +86,34 @@ struct AccountsTab: View {
                 }
             }
 
+            Section("Subscriptions (auto-detected)") {
+                if model.subscriptionSources.isEmpty {
+                    Text("None detected yet — sign in to Claude Code or Codex CLI on this Mac and they appear here within a few minutes.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(model.subscriptionSources, id: \.source) { src in
+                    Toggle(isOn: Binding(
+                        get: { src.enabled },
+                        set: { on in
+                            try? model.store.setSubscriptionSourceEnabled(source: src.source, enabled: on)
+                            model.refresh()
+                        }
+                    )) {
+                        VStack(alignment: .leading) {
+                            Text(src.source == SubscriptionSource.claude ? "Claude (Claude Code)" : "Codex (ChatGPT)")
+                            Text(subscriptionStatus(src))
+                                .font(.caption)
+                                .foregroundStyle(src.stale ? .orange : .secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
+                if model.subscriptionSources.contains(where: { $0.source == SubscriptionSource.claude }) {
+                    Text("Claude limits reuse Claude Code's sign-in from your Keychain (read-only). When macOS asks, click “Always Allow”.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             if showAddFlow {
                 Section("Add provider") {
                     Picker("Provider", selection: $selectedProvider) {
@@ -126,6 +154,12 @@ struct AccountsTab: View {
         }
     }
 
+    private func subscriptionStatus(_ src: SubscriptionSourceRow) -> String {
+        if src.stale { return "⚠ \(src.staleReason ?? "sign-in required")" }
+        if let ok = src.lastOK { return "✓ tracking limits · updated \(ok)" }
+        return "detected — waiting for first poll…"
+    }
+
     @ViewBuilder private var pairingStatus: some View {
         switch pairing.state {
         case .idle: EmptyView()
@@ -158,6 +192,13 @@ struct GeneralTab: View {
             }
             Picker("Refresh every", selection: $model.config.refreshMinutes) {
                 ForEach([5, 15, 30, 60], id: \.self) { Text("\($0) min").tag($0) }
+            }
+            Picker("Popover opens to", selection: $model.config.defaultTab) {
+                Text("API Spend").tag(PopoverTab.apiSpend)
+                Text("Subscriptions").tag(PopoverTab.subscriptions)
+            }
+            Picker("Subscription alert at", selection: $model.config.subscriptionAlertThreshold) {
+                ForEach([70, 80, 90, 95], id: \.self) { Text("\($0)% used").tag($0) }
             }
             Toggle("Keep app running (daemon relaunches it if it crashes)", isOn: $model.config.keepAppAlive)
             Toggle("Launch at login", isOn: Binding(

@@ -77,6 +77,30 @@ public enum Database {
             ALTER TABLE key_totals ADD COLUMN mtd_usd REAL;
             """)
         }
+        m.registerMigration("v6-subscriptions") { db in
+            try db.execute(sql: """
+            CREATE TABLE subscription_sources (
+                source TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                plan_type TEXT,
+                detected_at TEXT NOT NULL,
+                last_ok TEXT,
+                stale INTEGER NOT NULL DEFAULT 0,
+                stale_reason TEXT
+            );
+            CREATE TABLE subscription_snapshots (
+                source TEXT NOT NULL, window_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                used_percent REAL NOT NULL,
+                resets_at TEXT, window_minutes INTEGER,
+                origin TEXT NOT NULL,
+                PRIMARY KEY (source, window_id, observed_at)
+            );
+            CREATE INDEX idx_sub_snapshots_lookup
+                ON subscription_snapshots(source, window_id, observed_at DESC);
+            """)
+        }
         return m
     }
 }
