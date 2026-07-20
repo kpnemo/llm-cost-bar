@@ -32,6 +32,7 @@ public struct OpenRouterProvider: VendorProvider {
         struct K: Decodable {
             let name: String?
             let label: String?
+            let hash: String?
             let usage: Double?
             let disabled: Bool?
         }
@@ -42,8 +43,14 @@ public struct OpenRouterProvider: VendorProvider {
         let data: D
     }
 
-    private func getJSON<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
+    // Query items go through URLComponents: appendingPathComponent would
+    // percent-encode a "?" embedded in the path, breaking the real API.
+    private func getJSON<T: Decodable>(_ path: String, query: [URLQueryItem] = [],
+                                       as type: T.Type) async throws -> T {
+        var comps = URLComponents(url: baseURL.appendingPathComponent(path),
+                                  resolvingAgainstBaseURL: false)!
+        if !query.isEmpty { comps.queryItems = query }
+        let url = comps.url!
         let (data, status): (Data, Int)
         do { (data, status) = try await http.get(url, bearer: credential.apiKey) }
         catch let e as ProviderError { throw e }
@@ -68,11 +75,26 @@ public struct OpenRouterProvider: VendorProvider {
                        totalUsageUSD: resp.data.total_usage)
     }
 
+    /// Real per-key per-day dollars: /keys supplies name + hash, then one
+    /// /activity?api_key_hash= call per key returns its daily usage. Keys
+    /// without a hash (or with no activity in the window) drop out; display
+    /// name falls back name → label → "unnamed". Requires a management key,
+    /// same as the pooled /activity call.
     public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
-        let resp = try await getJSON("keys", as: KeysListResp.self)
-        return resp.data.map {
-            KeyTotal(apiKeyID: $0.name ?? $0.label ?? "unnamed", totalUSD: $0.usage ?? 0)
+        let keys = try await getJSON("keys", as: KeysListResp.self).data
+        var perKeyDay: [String: [String: Double]] = [:]   // display name → day → usd
+        for key in keys {
+            guard let hash = key.hash else { continue }
+            let name = key.name ?? key.label ?? "unnamed"
+            let resp = try await getJSON("activity",
+                                         query: [.init(name: "api_key_hash", value: hash)],
+                                         as: ActivityResp.self)
+            for row in resp.data where row.usage != 0 {
+                perKeyDay[name, default: [:]][String(row.date.prefix(10)), default: 0] += row.usage
+            }
         }
+        guard !perKeyDay.isEmpty else { return [] }
+        return KeyTotal.aggregate(perKeyDay: perKeyDay, names: [:], now: now)
     }
 
     public func fetchUsage(sinceDaysAgo: Int, now: Date = Date()) async throws -> [UsageRecord] {

@@ -83,6 +83,67 @@ final class OpenRouterProviderTests: XCTestCase {
         let info = try await makeProvider(http).validateCredentials()
         XCTAssertEqual(info.label, "claude-code")
     }
+
+    // MARK: per-key daily totals via /activity?api_key_hash=
+
+    // Hashes chosen so each key's activity URL contains a unique substring.
+    let keysWithHashesJSON = #"""
+    {"data":[
+      {"name":"prod","label":"sk-or-v1-aaa","hash":"hashAAA111","usage":120.5,"disabled":false},
+      {"name":null,"label":"ci-key","hash":"hashBBB222","usage":3.0,"disabled":false},
+      {"name":"no-hash-key","label":"legacy","usage":9.9,"disabled":false}
+    ]}
+    """#
+    // 1782777600 s = 2026-06-30 (prev month), now = 2026-07-01T12:00Z (1_782_907_200).
+    let activityAJSON = #"""
+    {"data":[
+      {"date":"2026-06-30 00:00:00","model":"openai/gpt-4.1","usage":3.0,"requests":2,"prompt_tokens":10,"completion_tokens":5},
+      {"date":"2026-07-01 00:00:00","model":"openai/gpt-4.1","usage":2.0,"requests":1,"prompt_tokens":4,"completion_tokens":2}
+    ]}
+    """#
+    let activityBJSON = #"""
+    {"data":[
+      {"date":"2026-07-01 00:00:00","model":"anthropic/claude-sonnet-5","usage":5.0,"requests":1,"prompt_tokens":9,"completion_tokens":3}
+    ]}
+    """#
+
+    func testKeyTotalsPerKeyDailyAcrossMonthBoundary() async throws {
+        let http = FakeHTTP()
+        http.responses["keys"] = (keysWithHashesJSON, 200)
+        http.responses["api_key_hash=hashAAA111"] = (activityAJSON, 200)
+        http.responses["api_key_hash=hashBBB222"] = (activityBJSON, 200)
+        let provider = makeProvider(http)
+        let totals = try await provider.fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+        XCTAssertEqual(totals.count, 2, "key without hash is skipped")
+        XCTAssertEqual(totals[0].apiKeyID, "ci-key", "sorted by MTD desc; name nil → label")
+        XCTAssertEqual(totals[0].totalUSD, 5.0, accuracy: 0.001)
+        XCTAssertEqual(totals[0].mtdUSD ?? -1, 5.0, accuracy: 0.001)
+        XCTAssertEqual(totals[0].todayUSD ?? -1, 5.0, accuracy: 0.001)
+        let prod = totals.first { $0.apiKeyID == "prod" }!
+        XCTAssertEqual(prod.totalUSD, 5.0, accuracy: 0.001)   // 3 + 2, both inside 30d window
+        XCTAssertEqual(prod.mtdUSD ?? -1, 2.0, accuracy: 0.001)   // 06-30 is last month
+        XCTAssertEqual(prod.todayUSD ?? -1, 2.0, accuracy: 0.001)
+    }
+
+    func testKeyTotalsEmptyWhenNoKeysHaveActivity() async throws {
+        let http = FakeHTTP()
+        http.responses["keys"] = (keysWithHashesJSON, 200)
+        http.responses["api_key_hash="] = (#"{"data":[]}"#, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+        XCTAssertTrue(totals.isEmpty)
+    }
+
+    func testKeyActivityErrorPropagates() async throws {
+        let http = FakeHTTP()
+        http.responses["keys"] = (keysWithHashesJSON, 200)
+        http.responses["api_key_hash="] = (#"{"error":"boom"}"#, 500)
+        do {
+            _ = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+            XCTFail("expected transient error")
+        } catch let e as ProviderError {
+            XCTAssertEqual(e.errorClass, "transient")
+        }
+    }
 }
 
 final class ClassifyHTTPTests: XCTestCase {
