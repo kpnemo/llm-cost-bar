@@ -31,6 +31,8 @@ The app is signed with a Developer ID and notarized by Apple — no Gatekeeper
 warnings. When the background daemon first reads a newly added key, macOS asks
 once per key; click **Always Allow**.
 
+What's new in each version: see the [changelog](CHANGELOG.md).
+
 ### Connecting providers
 
 | Vendor | What you need |
