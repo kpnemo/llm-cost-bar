@@ -37,6 +37,16 @@ final class AppConfigTests: XCTestCase {
         XCTAssertFalse(cfg.keepAppAlive)
         XCTAssertEqual(cfg.defaultTab, .apiSpend)
         XCTAssertEqual(cfg.subscriptionAlertThreshold, 80)
+        XCTAssertTrue(cfg.autoCheckUpdates)
+    }
+
+    func testAutoCheckUpdatesRoundTrip() throws {
+        var cfg = AppConfig()
+        cfg.autoCheckUpdates = false
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cfg-\(UUID().uuidString).json")
+        try cfg.save(to: url)
+        XCTAssertFalse(AppConfig.load(from: url).autoCheckUpdates)
     }
 
     func testSubscriptionFieldsRoundTrip() throws {

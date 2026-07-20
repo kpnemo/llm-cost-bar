@@ -9,6 +9,9 @@ public struct AppPaths: Sendable {
     public var heartbeat: URL     { base.appendingPathComponent("daemon-heartbeat") }
     public var syncRequest: URL   { base.appendingPathComponent("sync-request") }
     public var cleanQuitMark: URL { base.appendingPathComponent("app-clean-quit") }
+    /// Written by the updater just before relaunch (contains the new version);
+    /// the next launch reads+deletes it to show a one-shot "updated" confirmation.
+    public var updateInstalledMark: URL { base.appendingPathComponent("update-installed") }
 
     public static func resolve() -> AppPaths {
         let base: URL
