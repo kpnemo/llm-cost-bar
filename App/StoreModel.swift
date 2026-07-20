@@ -19,6 +19,10 @@ final class StoreModel: ObservableObject {
 
     let paths = AppPaths.resolve()
     let store: UsageStore
+    /// App start time: right after launch (esp. post-self-update) the daemon
+    /// was just re-bootstrapped and its heartbeat is legitimately missing for
+    /// a few seconds — that's "starting", not "paused".
+    let launchedAt = Date()
     private var timer: Timer?
 
     init() {
