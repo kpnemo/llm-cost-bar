@@ -78,6 +78,12 @@ enum DaemonManager {
         runLaunchctl(["kickstart", "gui/\(uid)/\(label)"])
     }
 
+    /// Stops the daemon and removes it from launchd (updater: must happen before
+    /// the bundle swap so the watchdog can't relaunch the old app mid-install).
+    static func bootout() {
+        runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])
+    }
+
     private static func runLaunchctl(_ args: [String]) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
@@ -92,12 +98,14 @@ struct LLMCostBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = StoreModel()
     @StateObject private var pairing = PairingController()
+    @StateObject private var updater = UpdaterModel()
 
     var body: some Scene {
         MenuBarExtra {
             DropdownView()
                 .environmentObject(model)
                 .environmentObject(pairing)
+                .environmentObject(updater)
         } label: {
             // Placeholder glyph until icon concepts are chosen (spec open item).
             HStack(spacing: 3) {
@@ -111,6 +119,7 @@ struct LLMCostBarApp: App {
             SettingsView()
                 .environmentObject(model)
                 .environmentObject(pairing)
+                .environmentObject(updater)
         }
     }
 

@@ -14,6 +14,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var keepAppAlive: Bool = true
     public var defaultTab: PopoverTab = .apiSpend
     public var subscriptionAlertThreshold: Int = 80   // % used that triggers a notification
+    public var autoCheckUpdates: Bool = true
 
     public init() {}
 
@@ -28,6 +29,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         keepAppAlive = (try? c.decodeIfPresent(Bool.self, forKey: .keepAppAlive)) ?? nil ?? true
         defaultTab = (try? c.decodeIfPresent(PopoverTab.self, forKey: .defaultTab)) ?? nil ?? .apiSpend
         subscriptionAlertThreshold = (try? c.decodeIfPresent(Int.self, forKey: .subscriptionAlertThreshold)) ?? nil ?? 80
+        autoCheckUpdates = (try? c.decodeIfPresent(Bool.self, forKey: .autoCheckUpdates)) ?? nil ?? true
     }
 
     /// Missing or corrupt file → defaults. Never throws: prefs must not brick either process.

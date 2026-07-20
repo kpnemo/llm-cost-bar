@@ -181,6 +181,7 @@ struct AccountsTab: View {
 
 struct GeneralTab: View {
     @EnvironmentObject var model: StoreModel
+    @EnvironmentObject var updater: UpdaterModel
 
     var body: some View {
         Form {
@@ -210,6 +211,26 @@ struct GeneralTab: View {
             ))
             Button("Sync now") { model.requestSync() }
 
+            Section("Updates") {
+                LabeledContent("Version", value: updater.currentVersion)
+                Toggle("Check for updates automatically (daily)", isOn: $model.config.autoCheckUpdates)
+                HStack {
+                    if let release = updater.availableRelease {
+                        Button("Install v\(release.version)") { updater.install() }
+                            .buttonStyle(.borderedProminent)
+                    } else {
+                        Button("Check for Updates…") { Task { await updater.check() } }
+                            .disabled(updater.phase == .checking)
+                    }
+                    if updater.phase == .checking {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                if let status = updateStatusLine {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             Section("Background service") {
                 LabeledContent("Daemon") {
                     Label(model.daemonHealthy ? "running" : "not responding",
@@ -233,6 +254,13 @@ struct GeneralTab: View {
         }
         .formStyle(.grouped)
         .onChange(of: model.config) { model.saveConfig() }
+    }
+
+    private var updateStatusLine: String? {
+        if case .failed(let msg) = updater.phase { return "Update failed: \(msg)" }
+        guard let last = updater.lastCheck, let result = updater.lastCheckResult else { return nil }
+        let time = last.formatted(date: .abbreviated, time: .shortened)
+        return "\(result) — last checked \(time)"
     }
 }
 

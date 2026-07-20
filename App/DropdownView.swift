@@ -5,6 +5,7 @@ import LLMCostBarCore
 struct DropdownView: View {
     @EnvironmentObject var model: StoreModel
     @EnvironmentObject var pairing: PairingController
+    @EnvironmentObject var updater: UpdaterModel
     @Environment(\.openSettings) private var openSettings
     @State private var collapsed: Set<String> = []
     @State private var tab: PopoverTab = .apiSpend
@@ -25,6 +26,8 @@ struct DropdownView: View {
             } else {
                 SubscriptionsSection()
             }
+
+            UpdateRow()
 
             Divider()
             HStack {
@@ -119,6 +122,66 @@ struct DropdownView: View {
         }
         .buttonStyle(.plain)
         .help("Sync now")
+    }
+}
+
+/// Quiet self-update row above the footer. Hidden entirely in the common case
+/// (no update known, nothing recently installed) so the popover stays lean.
+struct UpdateRow: View {
+    @EnvironmentObject var updater: UpdaterModel
+
+    var body: some View {
+        switch updater.phase {
+        case .justUpdated(let version):
+            row(tint: .green) {
+                Label("Updated to v\(version)", systemImage: "checkmark.circle")
+                    .foregroundStyle(.green)
+                Spacer()
+            }
+        case .downloading(let pct):
+            if let release = updater.availableRelease {
+                row(tint: .blue) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Downloading v\(release.version)… \(Int(pct * 100))%")
+                            .foregroundStyle(.blue)
+                        ProgressView(value: pct).controlSize(.small)
+                    }
+                }
+            }
+        case .installing:
+            row(tint: .blue) {
+                Label("Installing — restarting…", systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.blue)
+                Spacer()
+            }
+        case .failed(let message):
+            row(tint: .orange) {
+                Label("Update failed", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .help(message)
+                Spacer()
+                Button("Retry") { updater.install() }
+                    .controlSize(.small)
+            }
+        case .idle, .checking:
+            if let release = updater.availableRelease {
+                row(tint: .blue) {
+                    Label("Update available — v\(release.version)", systemImage: "arrow.up.circle")
+                        .foregroundStyle(.blue)
+                    Spacer()
+                    Button("Install") { updater.install() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    private func row<Content: View>(tint: Color, @ViewBuilder content: () -> Content) -> some View {
+        HStack(content: content)
+            .font(.subheadline)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
