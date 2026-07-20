@@ -80,6 +80,13 @@ public struct OpenRouterProvider: VendorProvider {
     /// without a hash (or with no activity in the window) drop out; display
     /// name falls back name → label → "unnamed". Requires a management key,
     /// same as the pooled /activity call.
+    ///
+    /// This is N+1 serial GETs (one /keys call, then one /activity call per
+    /// key), and the whole thing is retried wholesale by SyncEngine's
+    /// withRetry on any transient failure. Fine at today's key counts; if a
+    /// workspace's key count grows past ~20, revisit with a TaskGroup for
+    /// concurrent fetches or per-key retry tolerance so one flaky key doesn't
+    /// re-fetch everyone else's activity.
     public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
         let keys = try await getJSON("keys", as: KeysListResp.self).data
         var perKeyDay: [String: [String: Double]] = [:]   // display name → day → usd

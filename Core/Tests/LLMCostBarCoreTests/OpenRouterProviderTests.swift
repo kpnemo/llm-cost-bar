@@ -144,6 +144,58 @@ final class OpenRouterProviderTests: XCTestCase {
             XCTAssertEqual(e.errorClass, "transient")
         }
     }
+
+    func testKeyWithAllZeroUsageActivityDropsOut() async throws {
+        let http = FakeHTTP()
+        let keysJSON = #"""
+        {"data":[
+          {"name":"active","label":"sk-1","hash":"hashACT001","usage":10.0,"disabled":false},
+          {"name":"idle","label":"sk-2","hash":"hashIDL002","usage":0.0,"disabled":false}
+        ]}
+        """#
+        let activeActivityJSON = #"""
+        {"data":[
+          {"date":"2026-07-01 00:00:00","model":"openai/gpt-4.1","usage":4.0,"requests":1,"prompt_tokens":4,"completion_tokens":2}
+        ]}
+        """#
+        let idleActivityJSON = #"""
+        {"data":[
+          {"date":"2026-07-01 00:00:00","model":"openai/gpt-4.1","usage":0.0,"requests":1,"prompt_tokens":4,"completion_tokens":2},
+          {"date":"2026-06-30 00:00:00","model":"openai/gpt-4.1","usage":0.0,"requests":1,"prompt_tokens":4,"completion_tokens":2}
+        ]}
+        """#
+        http.responses["keys"] = (keysJSON, 200)
+        http.responses["api_key_hash=hashACT001"] = (activeActivityJSON, 200)
+        http.responses["api_key_hash=hashIDL002"] = (idleActivityJSON, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+        XCTAssertEqual(totals.map(\.apiKeyID), ["active"], "all-zero-usage key drops out entirely")
+    }
+
+    func testTwoKeysSameDisplayNameMergeIntoOneSummedRow() async throws {
+        let http = FakeHTTP()
+        let keysJSON = #"""
+        {"data":[
+          {"name":"shared","label":"sk-1","hash":"hashSHR001","usage":3.0,"disabled":false},
+          {"name":"shared","label":"sk-2","hash":"hashSHR002","usage":2.0,"disabled":false}
+        ]}
+        """#
+        let activityOneJSON = #"""
+        {"data":[
+          {"date":"2026-07-01 00:00:00","model":"openai/gpt-4.1","usage":3.0,"requests":1,"prompt_tokens":4,"completion_tokens":2}
+        ]}
+        """#
+        let activityTwoJSON = #"""
+        {"data":[
+          {"date":"2026-07-01 00:00:00","model":"openai/gpt-4.1","usage":2.0,"requests":1,"prompt_tokens":4,"completion_tokens":2}
+        ]}
+        """#
+        http.responses["keys"] = (keysJSON, 200)
+        http.responses["api_key_hash=hashSHR001"] = (activityOneJSON, 200)
+        http.responses["api_key_hash=hashSHR002"] = (activityTwoJSON, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+        XCTAssertEqual(totals.count, 1, "distinct hashes sharing a display name merge into one row")
+        XCTAssertEqual(totals[0].totalUSD, 5.0, accuracy: 0.001)
+    }
 }
 
 final class ClassifyHTTPTests: XCTestCase {

@@ -13,7 +13,7 @@ public struct Summary: Equatable, Sendable {
 public struct KeySpend: Equatable, Hashable, Sendable {
     public var accountID: String
     public var apiKeyID: String
-    public var totalUSD: Double   // 30-day (Anthropic/OpenAI) or lifetime (OpenRouter)
+    public var totalUSD: Double   // trailing 30-day dollars, all vendors
     public var todayUSD: Double?  // nil when the vendor has no per-day key data
     public var mtdUSD: Double?
 }

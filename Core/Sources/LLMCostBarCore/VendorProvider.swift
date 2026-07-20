@@ -5,7 +5,7 @@ public protocol VendorProvider: Sendable {
     func validateCredentials() async throws -> AccountInfo
     func fetchUsage(sinceDaysAgo: Int, now: Date) async throws -> [UsageRecord]
     func fetchBalance() async throws -> Balance?      // nil if vendor has no prepaid balance
-    func fetchKeyTotals(now: Date) async throws -> [KeyTotal]  // per-key spend windows; [] if unsupported
+    func fetchKeyTotals(now: Date) async throws -> [KeyTotal]  // per-key today/MTD/30d windows; [] if unsupported
 }
 
 public extension VendorProvider {

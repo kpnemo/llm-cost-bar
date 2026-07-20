@@ -88,7 +88,7 @@ public final class SyncEngine: @unchecked Sendable {
             handle(.transient(truncated(String(describing: error))), account: account, endpoint: "balance")
         }
 
-        // Per-key lifetime totals — best-effort like balance; never blocks usage sync.
+        // Per-key windowed totals (today/MTD/30d) — best-effort like balance; never blocks usage sync.
         do {
             let totals = try await withRetry(sleeper: sleeper) { try await provider.fetchKeyTotals(now: Date()) }
             try store.upsertKeyTotals(vendor: account.vendor, accountID: account.id, totals: totals)

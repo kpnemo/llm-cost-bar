@@ -221,13 +221,13 @@ struct VendorCard: View {
             // isn't guaranteed unique across accounts, so identify rows by the
             // whole value.
             //
-            // OpenRouter reports lifetime per-key totals only (no daily data) →
-            // single column; OpenAI real per-day dollars; Anthropic per-day
-            // estimates allocated from org cost by token share.
+            // All three vendors now report per-day per-key dollars: Anthropic
+            // estimated (allocated from org cost by token share), OpenAI and
+            // OpenRouter real dollars (OpenRouter via per-key /activity calls).
+            // The single-column branch below remains only as a fallback for
+            // old daemon data that predates per-key windows.
             if !vendor.topKeys.isEmpty {
-                Text(vendor.vendor == "anthropic" ? "API keys · est. spend"
-                     : vendor.vendor == "openai" ? "API keys"
-                     : "API keys · total spend")
+                Text(vendor.vendor == "anthropic" ? "API keys · est. spend" : "API keys")
                     .font(.caption).foregroundStyle(.tertiary)
             }
             let hasWindows = vendor.topKeys.contains { $0.mtdUSD != nil }

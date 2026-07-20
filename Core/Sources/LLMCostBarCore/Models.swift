@@ -18,9 +18,10 @@ public struct UsageRecord: Equatable, Sendable {
     }
 }
 
-/// One API key's spend. totalUSD window depends on the vendor: OpenRouter
-/// lifetime, OpenAI real 30-day dollars, Anthropic 30-day estimates.
-/// todayUSD/mtdUSD are nil when the vendor has no per-day key data (OpenRouter).
+/// One API key's spend. All vendors now report a trailing-30-day totalUSD:
+/// OpenAI and OpenRouter real dollars (OpenRouter via per-key /activity
+/// calls), Anthropic 30-day estimates. todayUSD/mtdUSD are nil only for
+/// old daemon data that predates per-key windows.
 public struct KeyTotal: Equatable, Sendable {
     public var apiKeyID: String
     public var totalUSD: Double
