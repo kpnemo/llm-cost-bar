@@ -19,6 +19,16 @@ public struct ReleaseInfo: Equatable, Sendable {
 public struct UpdateService: Sendable {
     public static let defaultAPI = URL(string: "https://api.github.com/repos/kpnemo/llm-cost-bar/releases/latest")!
     public static let assetName = "LLMCostBar.dmg"
+    /// Team on the "Developer ID Application" certificate that release.sh signs
+    /// published DMGs with. NOT the DEVELOPMENT_TEAM in Signing.xcconfig
+    /// (4KY3876TB2) — that is the Apple Development team used for local builds;
+    /// pinning it here rejects every real release.
+    public static let releaseTeamID = "R5QHA2A8Z9"
+
+    /// True iff `codesign -dvv` output attests the given team.
+    public static func codesignOutput(_ output: String, containsTeam team: String) -> Bool {
+        output.contains("TeamIdentifier=\(team)")
+    }
 
     let http: HTTPClient
     let apiURL: URL

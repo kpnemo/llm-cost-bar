@@ -55,8 +55,8 @@ Core: UpdateService                      App: UpdaterModel (ObservableObject)
 2. `hdiutil attach -nobrowse -readonly`, `ditto` the `.app` to a staging dir,
    `hdiutil detach`.
 3. Verify the staged bundle **before touching anything**:
-   `codesign --verify --deep --strict` passes, TeamIdentifier equals
-   `4KY3876TB2`, and staged `CFBundleShortVersionString` matches the release.
+   `codesign --verify --deep --strict` passes, TeamIdentifier equals `R5QHA2A8Z9` (the Developer ID release-signing team — NOT the
+   dev DEVELOPMENT_TEAM 4KY3876TB2), and staged `CFBundleShortVersionString` matches the release.
 4. Strip quarantine from the staged bundle (post-verification) so relaunch
    avoids Gatekeeper translocation.
 5. Stop the daemon: `launchctl bootout gui/<uid>/com.mikeb.llmcostd` and

@@ -17,7 +17,13 @@ enum InstallError: LocalizedError {
 /// restores it before rethrowing.
 enum UpdateInstaller {
     static let log = Logger(subsystem: AppIDs.subsystem, category: "updater")
-    static let expectedTeamID = "4KY3876TB2"
+
+    /// Logs and returns — every abort must be visible in `log show`, not just
+    /// the UI row (the 4KY3876TB2 team-pin bug was invisible in logs).
+    private static func fail(_ message: String) -> InstallError {
+        log.error("install aborted: \(message)")
+        return .step(message)
+    }
 
     /// Runs the full sequence except the final relaunch (the caller owns UI
     /// state and process exit). Returns the installed bundle URL.
@@ -41,7 +47,7 @@ enum UpdateInstaller {
         let staged = work.appendingPathComponent("staged.app")
         do {
             let appName = try fm.contentsOfDirectory(atPath: mount.path).first { $0.hasSuffix(".app") }
-            guard let appName else { throw InstallError.step("DMG contains no .app") }
+            guard let appName else { throw fail("DMG contains no .app") }
             try run("/usr/bin/ditto", [mount.appendingPathComponent(appName).path, staged.path],
                     step: "copying app from DMG")
         } catch {
@@ -55,13 +61,13 @@ enum UpdateInstaller {
                 step: "verifying signature")
         // codesign -dvv prints signing info on stderr; run() captures both.
         let signInfo = try run("/usr/bin/codesign", ["-dvv", staged.path], step: "reading signature")
-        guard signInfo.contains("TeamIdentifier=\(expectedTeamID)") else {
-            throw InstallError.step("downloaded app is signed by an unexpected team — aborting")
+        guard UpdateService.codesignOutput(signInfo, containsTeam: UpdateService.releaseTeamID) else {
+            throw fail("downloaded app is signed by an unexpected team — aborting")
         }
         let stagedPlist = staged.appendingPathComponent("Contents/Info.plist")
         let stagedVersion = (NSDictionary(contentsOf: stagedPlist)?["CFBundleShortVersionString"] as? String) ?? "?"
         guard stagedVersion == release.version else {
-            throw InstallError.step("downloaded app is v\(stagedVersion), expected v\(release.version)")
+            throw fail("downloaded app is v\(stagedVersion), expected v\(release.version)")
         }
 
         // 4. Verified — strip quarantine so relaunch avoids Gatekeeper translocation.
@@ -135,11 +141,11 @@ enum UpdateInstaller {
                 observation?.invalidate()
                 observation = nil
                 if let error {
-                    return cont.resume(throwing: InstallError.step("download failed: \(error.localizedDescription)"))
+                    return cont.resume(throwing: fail("download failed: \(error.localizedDescription)"))
                 }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 guard status == 200, let tmp else {
-                    return cont.resume(throwing: InstallError.step("download failed (HTTP \(status))"))
+                    return cont.resume(throwing: fail("download failed (HTTP \(status))"))
                 }
                 do {
                     // Must move before this handler returns — URLSession deletes tmp after.
@@ -147,7 +153,7 @@ enum UpdateInstaller {
                     try FileManager.default.moveItem(at: tmp, to: dest)
                     cont.resume()
                 } catch {
-                    cont.resume(throwing: InstallError.step("saving download: \(error.localizedDescription)"))
+                    cont.resume(throwing: fail("saving download: \(error.localizedDescription)"))
                 }
             }
             observation = task.progress.observe(\.fractionCompleted) { p, _ in
@@ -167,12 +173,12 @@ enum UpdateInstaller {
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = pipe
-        do { try p.run() } catch { throw InstallError.step("\(step): \(error.localizedDescription)") }
+        do { try p.run() } catch { throw fail("\(step): \(error.localizedDescription)") }
         let output = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         let text = String(data: output, encoding: .utf8) ?? ""
         guard p.terminationStatus == 0 else {
-            throw InstallError.step("\(step): \(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))")
+            throw fail("\(step): \(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))")
         }
         return text
     }

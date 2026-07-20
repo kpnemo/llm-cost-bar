@@ -80,6 +80,36 @@ final class UpdateServiceTests: XCTestCase {
         XCTAssertTrue(UpdateService.isNewer("v2.0", than: "1.9.9"))
     }
 
+    // MARK: release team verification
+
+    /// Recorded from `codesign -dvv` on the actual published v1.2.0 app.
+    /// Regression guard for the v1.1.0-test failure where the updater pinned
+    /// 4KY3876TB2 (the DEVELOPMENT_TEAM dev-signing team) instead of the
+    /// Developer ID team that signs shipping DMGs.
+    let codesignDvvOutput = """
+    Executable=/tmp/staged.app/Contents/MacOS/LLMCostBar
+    Identifier=com.mikeb.LLMCostBar
+    Format=app bundle with Mach-O universal (x86_64 arm64)
+    Signature size=9066
+    Authority=Developer ID Application: Mike Bogdanovsky (R5QHA2A8Z9)
+    Authority=Developer ID Certification Authority
+    Authority=Apple Root CA
+    Timestamp=Jul 19, 2026 at 22:41:03
+    TeamIdentifier=R5QHA2A8Z9
+    Runtime Version=15.5.0
+    """
+
+    func testReleaseTeamMatchesPublishedSignature() {
+        XCTAssertTrue(UpdateService.codesignOutput(codesignDvvOutput,
+                                                   containsTeam: UpdateService.releaseTeamID))
+    }
+
+    func testTeamCheckRejectsOtherTeamsAndAdhoc() {
+        XCTAssertFalse(UpdateService.codesignOutput(codesignDvvOutput, containsTeam: "4KY3876TB2"))
+        XCTAssertFalse(UpdateService.codesignOutput("TeamIdentifier=not set",
+                                                    containsTeam: UpdateService.releaseTeamID))
+    }
+
     // MARK: check (network via injected fake)
 
     func testCheckReturnsInfoWhenRemoteIsNewer() async throws {
