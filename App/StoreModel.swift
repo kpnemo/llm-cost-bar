@@ -50,6 +50,13 @@ final class StoreModel: ObservableObject {
             store = s
         }
 
+        // Consolidate pre-1.3.4 per-vendor keychain items into the single vault
+        // item. App-only on purpose: the app created those items, so it reads
+        // them without consent prompts; the daemon would prompt per item.
+        // No-op on fresh installs and after the first successful run.
+        let accountIDs = (try? store.accounts())?.map(\.id) ?? []
+        _ = try? KeychainStore().migrateLegacyKeys(accountIDs: accountIDs)
+
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
