@@ -7,7 +7,6 @@ struct DropdownView: View {
     @EnvironmentObject var pairing: PairingController
     @EnvironmentObject var updater: UpdaterModel
     @Environment(\.openSettings) private var openSettings
-    @State private var collapsed: Set<String> = []
     @State private var tab: PopoverTab = .apiSpend
 
     var body: some View {
@@ -81,14 +80,21 @@ struct DropdownView: View {
     }
 
     @ViewBuilder private var apiSpendContent: some View {
+        // Expand/collapse persists in config (collapsed by default): only
+        // vendors in expandedVendors render open, across popover opens and
+        // app relaunches.
         ForEach(model.vendors, id: \.vendor) { v in
             VendorCard(vendor: v,
                        account: model.accounts.first { $0.vendor == v.vendor },
                        series: model.series[v.vendor] ?? [],
-                       isCollapsed: collapsed.contains(v.vendor),
+                       isCollapsed: !model.config.expandedVendors.contains(v.vendor),
                        toggle: {
-                           if collapsed.contains(v.vendor) { collapsed.remove(v.vendor) }
-                           else { collapsed.insert(v.vendor) }
+                           if let i = model.config.expandedVendors.firstIndex(of: v.vendor) {
+                               model.config.expandedVendors.remove(at: i)
+                           } else {
+                               model.config.expandedVendors.append(v.vendor)
+                           }
+                           model.saveConfig()
                        })
         }
 
