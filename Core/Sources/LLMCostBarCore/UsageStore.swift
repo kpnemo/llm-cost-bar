@@ -70,7 +70,7 @@ extension SyncLogRow: Identifiable {
 
 /// All reads/writes both processes perform. `DatabaseWriter` covers DatabasePool (disk) and DatabaseQueue (tests).
 public final class UsageStore: Sendable {
-    private let db: any DatabaseWriter
+    let db: any DatabaseWriter   // internal: UsageStore+Subscriptions.swift shares it
     public init(db: any DatabaseWriter) { self.db = db }
 
     // MARK: writes (daemon + pairing)
