@@ -159,10 +159,13 @@ Nowhere. There's no server. Your Mac talks to the vendor APIs directly and
 stores results in a local SQLite database. Keys are Keychain-only.
 See PRIVACY.md in the repo.
 
-**Why does macOS ask about Keychain access when I add a provider?**
-The background daemon is a separate binary from the app, and macOS grants
-Keychain access per item — so you approve each newly added key once. Click
-"Always Allow" and you won't be asked again for that key.
+**Why does macOS ask about Keychain access?**
+Your keys live only in the macOS Keychain, and the background sync service is
+a separate binary from the app — so macOS asks once before letting it read
+them. All keys share a single Keychain item, so you'll see at most **two**
+prompts ever: one for your vendor keys (however many providers you add), and
+a read-only one for Claude Code's sign-in if you use the Subscriptions tab.
+Click "Always Allow" and neither returns.
 
 **I don't use API keys, just Claude Max / ChatGPT Plus. Is this for me?**
 Yes — that's exactly what the Subscriptions tab is for. Skip the API-key

@@ -84,6 +84,18 @@ struct AccountsTab: View {
                 if !model.accounts.isEmpty && !showAddFlow {
                     Button("Add Provider…") { showAddFlow = true; pairing.state = .idle }
                 }
+
+                Text("""
+                🔒 **About Keychain prompts.** Your API keys are stored only in the \
+                macOS Keychain — never in files or logs — in a single shared item. \
+                The first time the background sync service reads it, macOS asks for \
+                permission (“llmcostd wants to access…”): click **Always Allow** \
+                once and it never asks again, no matter how many providers you add. \
+                If you also use the Subscriptions tab with Claude, there is one more \
+                read-only prompt for Claude Code's sign-in. That's it — at most two \
+                Keychain prompts, ever.
+                """)
+                .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Subscriptions (auto-detected)") {

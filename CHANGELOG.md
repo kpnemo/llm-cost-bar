@@ -6,6 +6,16 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.4] - 2026-07-21
+
+### Changed
+- All vendor API keys now share a **single Keychain item**, so macOS asks for
+  Keychain permission at most twice ever: once for your keys (no matter how
+  many providers you add) and once, read-only, for Claude Code's sign-in if
+  you use Subscriptions. Existing keys are carried over automatically — you
+  may see one final "Always Allow" prompt after this update.
+- Settings → Accounts now explains the Keychain prompts up front.
+
 ## [1.3.3] - 2026-07-21
 
 ### Fixed
