@@ -33,6 +33,9 @@ struct DropdownView: View {
                 Button("Settings…") { openSettings(); NSApp.activate(ignoringOtherApps: true) }
                 Button("Quit") { NSApp.terminate(nil) }
                 Spacer()
+                Text("v\(updater.currentVersion)")
+                    .font(.caption).foregroundStyle(.tertiary)
+                    .help("LLM Cost Bar version")
                 syncStatus
             }
             .font(.body)

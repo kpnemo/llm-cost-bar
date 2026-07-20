@@ -6,6 +6,11 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] - 2026-07-21
+
+### Added
+- The popover footer shows the current app version.
+
 ## [1.3.1] - 2026-07-21
 
 ### Changed
