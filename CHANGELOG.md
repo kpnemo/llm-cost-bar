@@ -6,6 +6,15 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.3] - 2026-07-21
+
+### Fixed
+- After an update (or app launch), the popover footer briefly showed a false
+  "sync paused" warning while the background service was still starting; it
+  now shows a calm "syncing…" during that window.
+- The popover now refreshes every 5 seconds while open, so the sync status
+  and amounts update live instead of requiring a close/reopen.
+
 ## [1.3.2] - 2026-07-21
 
 ### Added

@@ -8,6 +8,7 @@ struct DropdownView: View {
     @EnvironmentObject var updater: UpdaterModel
     @Environment(\.openSettings) private var openSettings
     @State private var tab: PopoverTab = .apiSpend
+    @State private var liveRefresh: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -48,6 +49,20 @@ struct DropdownView: View {
             // Every popover open starts on the configured default tab (refresh()
             // just reloaded config, so a settings change applies immediately).
             tab = model.config.defaultTab
+            // While the popover is open, refresh every 5 s so the footer status
+            // ("syncing…" → "N min ago") and amounts update live instead of
+            // waiting for the 30 s background timer or a close/reopen.
+            liveRefresh?.cancel()
+            liveRefresh = Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(5))
+                    model.refresh()
+                }
+            }
+        }
+        .onDisappear {
+            liveRefresh?.cancel()
+            liveRefresh = nil
         }
     }
 
@@ -109,8 +124,15 @@ struct DropdownView: View {
 
     @ViewBuilder private var syncStatus: some View {
         if !model.daemonHealthy {
-            Label("sync paused", systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
+            // Grace window: right after launch/self-update the daemon is still
+            // booting and hasn't heartbeat yet — "paused" would be a false alarm.
+            if Date().timeIntervalSince(model.launchedAt) < 120 {
+                Label("syncing…", systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("sync paused", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
         } else if let last = model.accounts.compactMap(\.lastSyncOK).max(),
                   let date = ISO8601DateFormatter().date(from: last) {
             let mins = Int(Date().timeIntervalSince(date) / 60)
