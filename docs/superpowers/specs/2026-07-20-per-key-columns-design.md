@@ -96,6 +96,32 @@ Computed like MTD, so the header/menu-bar number is live-corrected:
 - Config wrote `last30Days` then opened by an older build: `AppConfig.load`
   falls back to defaults on decode failure (existing behavior, acceptable).
 
+## Addendum 2026-07-21: OpenRouter three-column parity
+
+OpenRouter's API now supports per-key daily data, so its key list joins the
+three-column layout (real dollars, like OpenAI):
+
+- `GET /api/v1/keys` returns each key's `hash` (SHA-256) alongside
+  name/label/lifetime usage. `GET /api/v1/activity?api_key_hash=<hash>`
+  returns that key's daily rows (last 30 days). Both require the management
+  key the app already uses.
+- `OpenRouterProvider.fetchKeyTotals(now:)`: list keys, then one activity
+  call per key (keys without a `hash` are skipped); accumulate
+  per-key-per-day dollars keyed by display name (name ?? label ?? "unnamed")
+  and return `KeyTotal.aggregate(...)` — same windows, clipping, and sort as
+  the other providers. Any per-key fetch error fails the whole call
+  (propagates to sync_log via the existing best-effort keys step).
+- `totalUSD` semantics change for OpenRouter: 30-day window (was lifetime).
+  A key with no spend in the window drops off the list — consistent with
+  the other vendors' `total_usd > 0` store filter.
+- UI: OpenRouter now takes the three-column path via the existing
+  `hasWindows` gate (no layout changes); its caption becomes the plain
+  "API keys" used for OpenAI (real dollars, no estimation note).
+- Doc comments that describe OpenRouter per-key totals as "lifetime"
+  (KeyTotal, KeySpend, VendorProvider) are updated.
+- ~5-10 extra API calls per sync (one per key) — negligible at the 15-min
+  poll cadence.
+
 ## Testing (Core — `cd Core && swift test` must stay green)
 
 - Provider fixture tests (recorded JSON): per-day allocation correctness,
