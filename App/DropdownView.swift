@@ -8,7 +8,6 @@ struct DropdownView: View {
     @Environment(\.openSettings) private var openSettings
     @State private var collapsed: Set<String> = []
     @State private var tab: PopoverTab = .apiSpend
-    @State private var tabSeeded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -41,12 +40,9 @@ struct DropdownView: View {
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.pairing = pairing
             model.refresh()
-            // Seed once per app run so switching tabs mid-session sticks, but
-            // every popover open starts on the user's configured default.
-            if !tabSeeded {
-                tabSeeded = true
-                tab = model.config.defaultTab
-            }
+            // Every popover open starts on the configured default tab (refresh()
+            // just reloaded config, so a settings change applies immediately).
+            tab = model.config.defaultTab
         }
     }
 
