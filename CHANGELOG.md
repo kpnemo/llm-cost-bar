@@ -6,6 +6,18 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-07-21
+
+### Added
+- **Self-update** — the app now checks GitHub Releases for new versions
+  (quietly once a day, or on demand via Settings → General → Check for
+  Updates…) and shows an unobtrusive "Update available" row in the popover.
+  One click downloads the new version, verifies its Developer ID signature
+  (pinned to this app's release team), swaps it into place, restarts the
+  background service, and relaunches — no manual download needed again.
+- Settings → General gains an **Updates** section: current version,
+  automatic-check toggle, manual check button, and last-check status.
+
 ## [1.2.0] - 2026-07-21
 
 ### Added
