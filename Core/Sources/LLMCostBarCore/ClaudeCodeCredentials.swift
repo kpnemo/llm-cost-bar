@@ -74,7 +74,24 @@ public enum ClaudeCodeCredentials {
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         }
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status: OSStatus
+        if ui == .noPrompt {
+            // kSecUseAuthenticationUIFail governs only LocalAuthentication UI;
+            // for LEGACY file-based items (Claude Code's is one) the ACL
+            // consent dialog is gated by SecKeychainSetUserInteractionAllowed
+            // instead — verified live 2026-07-22 when the daemon's "no-UI"
+            // probe threw the full password dialog from the background.
+            // Scope the suppression to this one call and restore, so the
+            // app's click-gated read and the daemon's one-time vault consent
+            // prompt keep working.
+            var previous: DarwinBoolean = true
+            SecKeychainGetUserInteractionAllowed(&previous)
+            SecKeychainSetUserInteractionAllowed(false)
+            status = SecItemCopyMatching(query as CFDictionary, &result)
+            SecKeychainSetUserInteractionAllowed(previous.boolValue)
+        } else {
+            status = SecItemCopyMatching(query as CFDictionary, &result)
+        }
         switch status {
         case errSecSuccess:
             guard let data = result as? Data else { return .denied("keychain returned non-data") }

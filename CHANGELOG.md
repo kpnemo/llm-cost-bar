@@ -6,6 +6,20 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.14] - 2026-07-22
+
+### Fixed
+- **Critical: the background service could still show a Keychain dialog.**
+  Caught live while testing the reconnect flow: the daemon's "no-UI" probe
+  of Claude Code's sign-in relied on `kSecUseAuthenticationUIFail`, which
+  only suppresses LocalAuthentication (Touch ID-style) UI — the legacy
+  file-keychain ACL dialog is governed by
+  `SecKeychainSetUserInteractionAllowed`, so once consent was missing the
+  probe threw the full password prompt from the background, every poll.
+  The probe now disables keychain UI for exactly that one call (and
+  restores it), so a blocked probe fails silently into the "needs
+  reconnect" card state — the behavior 1.3.9 promised.
+
 ## [1.3.13] - 2026-07-22
 
 ### Fixed
