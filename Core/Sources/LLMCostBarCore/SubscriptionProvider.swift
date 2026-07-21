@@ -18,12 +18,14 @@ public struct ClaudeSubscriptionProvider: SubscriptionProvider {
     public let sourceID = SubscriptionSource.claude
     let http: any HTTPClient
     let base: URL
-    let credentials: @Sendable () -> ClaudeCredentialState
+    /// Non-interactive by construction in the daemon (ClaudeTokenResolver):
+    /// this provider can therefore never trigger a keychain prompt.
+    let credentials: any ClaudeCredentialSource
     let detect: @Sendable () -> Bool
 
     public init(http: any HTTPClient = URLSessionHTTPClient(),
                 base: URL = URL(string: "https://api.anthropic.com")!,
-                credentials: @escaping @Sendable () -> ClaudeCredentialState = { ClaudeCodeCredentials.read() },
+                credentials: any ClaudeCredentialSource = ClaudeTokenResolver.live(),
                 detect: @escaping @Sendable () -> Bool = { ClaudeCodeCredentials.isDetected() }) {
         self.http = http; self.base = base; self.credentials = credentials; self.detect = detect
     }
@@ -31,14 +33,35 @@ public struct ClaudeSubscriptionProvider: SubscriptionProvider {
     public func isDetected() -> Bool { detect() }
 
     public func fetchSnapshot(now: Date) async throws -> SubscriptionSnapshot {
-        let token: String
-        let plan: String?
-        switch credentials() {
-        case .found(let t, let p): token = t; plan = p
-        case .notFound: throw ProviderError.auth(0, "sign in to Claude Code first")
-        case .denied(let reason): throw ProviderError.auth(0, reason)
+        let resolved: ResolvedClaudeToken
+        switch credentials.resolve() {
+        case .found(let t): resolved = t
+        case .signedOut: throw ProviderError.auth(0, "sign in to Claude Code first")
+        case .reconnectNeeded: throw ProviderError.auth(0, ClaudeTokenResolver.reconnectReason)
         case .invalid(let reason): throw ProviderError.decode(reason)
         }
+        var token = resolved
+        var (data, status) = try await usageRequest(token: token.accessToken)
+        if status == 401 {
+            // Claude Code may have rotated the token under our cache — give the
+            // source ONE chance to hand back a replacement (silent recovery);
+            // otherwise surface its stale reason. Never loops.
+            let (retry, reason) = credentials.after401(failedToken: token.accessToken,
+                                                       source: token.source)
+            guard let retry else { throw ProviderError.auth(401, reason) }
+            token = retry
+            (data, status) = try await usageRequest(token: token.accessToken)
+            if status == 401 {
+                let (_, reason) = credentials.after401(failedToken: token.accessToken,
+                                                       source: token.source)
+                throw ProviderError.auth(401, reason)
+            }
+        }
+        if let err = classifyHTTP(status: status, data: data) { throw err }
+        return try Self.parse(data, planType: token.subscriptionType, now: now)
+    }
+
+    private func usageRequest(token: String) async throws -> (Data, Int) {
         let headers = [
             "Authorization": "Bearer \(token)",
             "Accept": "application/json",
@@ -46,13 +69,7 @@ public struct ClaudeSubscriptionProvider: SubscriptionProvider {
             // Load-bearing: without a claude-code UA this endpoint rate-limits aggressively.
             "User-Agent": "claude-code/2.0.0",
         ]
-        let (data, status) = try await http.get(base.appendingPathComponent("api/oauth/usage"),
-                                                headers: headers)
-        if status == 401 {
-            throw ProviderError.auth(401, "open Claude Code to refresh sign-in")
-        }
-        if let err = classifyHTTP(status: status, data: data) { throw err }
-        return try Self.parse(data, planType: plan, now: now)
+        return try await http.get(base.appendingPathComponent("api/oauth/usage"), headers: headers)
     }
 
     static let windowIDs = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"]

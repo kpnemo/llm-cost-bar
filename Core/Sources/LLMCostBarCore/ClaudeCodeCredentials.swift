@@ -8,6 +8,21 @@ public enum ClaudeCredentialState: Equatable, Sendable {
     case invalid(String)          // blob exists but doesn't parse → decode-class failure
 }
 
+/// Whether a keychain read may present the macOS consent dialog. `.noPrompt`
+/// adds kSecUseAuthenticationUIFail so a read that would need consent returns
+/// errSecInteractionNotAllowed instead of ambushing the user — the only mode
+/// the daemon is allowed to use.
+public enum KeychainReadUI: Sendable { case interactive, noPrompt }
+
+/// Raw outcome of reading Claude Code's credential blob, pre-parse: the
+/// consumer decides whether it wants just the token (parse) or the whole
+/// blob (to build the vault cache).
+public enum ClaudeBlobResult: Equatable, Sendable {
+    case data(Data)
+    case notFound
+    case denied(String)
+}
+
 /// Read-only accessor for Claude Code's own OAuth credentials. NEVER writes,
 /// refreshes, or deletes the item — Claude Code owns the token lifecycle, and
 /// rotating its refresh token from here would log the user out of Claude Code.
@@ -44,27 +59,44 @@ public enum ClaudeCodeCredentials {
         return FileManager.default.fileExists(atPath: credentialsFile.path)
     }
 
-    /// First data read triggers the one-time macOS consent prompt ("Always Allow").
-    public static func read(credentialsFile: URL = defaultCredentialsFile) -> ClaudeCredentialState {
-        let query: [String: Any] = [
+    /// Raw blob read. `.interactive` may show the macOS consent dialog — the
+    /// APP calls it only from a user click (Connect/Reconnect); the daemon
+    /// must always pass `.noPrompt`, which fails silently instead of asking.
+    public static func readBlob(ui: KeychainReadUI,
+                                credentialsFile: URL = defaultCredentialsFile) -> ClaudeBlobResult {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
         ]
+        if ui == .noPrompt {
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {
         case errSecSuccess:
-            guard let data = result as? Data else { return .invalid("keychain returned non-data") }
-            return parse(data)
+            guard let data = result as? Data else { return .denied("keychain returned non-data") }
+            return .data(data)
         case errSecItemNotFound:
             guard let data = try? Data(contentsOf: credentialsFile) else { return .notFound }
-            return parse(data)
+            return .data(data)
         case errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed:
-            return .denied("grant llmcostd access to '\(service)' in Keychain — click Always Allow")
+            return .denied("keychain access to '\(service)' not granted")
         default:
             return .denied("keychain error \(status)")
+        }
+    }
+
+    /// Parsed read; interactive by default (first read triggers the one-time
+    /// macOS consent prompt).
+    public static func read(ui: KeychainReadUI = .interactive,
+                            credentialsFile: URL = defaultCredentialsFile) -> ClaudeCredentialState {
+        switch readBlob(ui: ui, credentialsFile: credentialsFile) {
+        case .data(let data): return parse(data)
+        case .notFound: return .notFound
+        case .denied(let reason): return .denied(reason)
         }
     }
 }

@@ -5,6 +5,7 @@ import LLMCostBarCore
 /// Subscriptions tab body: one card per enabled auto-detected source.
 struct SubscriptionsSection: View {
     @EnvironmentObject var model: StoreModel
+    @EnvironmentObject var claudeConnect: ClaudeConnectController
 
     var body: some View {
         let enabled = model.subscriptionSources.filter(\.enabled)
@@ -13,10 +14,17 @@ struct SubscriptionsSection: View {
                 .foregroundStyle(.secondary).font(.body)
         }
         ForEach(enabled, id: \.source) { src in
+            let isClaude = src.source == SubscriptionSource.claude
             SubscriptionCard(source: src,
                              windows: SubscriptionCard.ordered(model.subscriptionWindows.filter { $0.source == src.source }),
                              series: model.subscriptionSeries[src.source] ?? [],
-                             threshold: model.config.subscriptionAlertThreshold)
+                             threshold: model.config.subscriptionAlertThreshold,
+                             connectPhase: isClaude ? claudeConnect.phase : nil,
+                             onConnect: isClaude ? { claudeConnect.connect() } : nil)
+        }
+        .onAppear {
+            claudeConnect.store = model.store
+            claudeConnect.onChanged = { model.refresh() }
         }
     }
 }
@@ -26,6 +34,8 @@ struct SubscriptionCard: View {
     let windows: [SubscriptionWindowRow]
     let series: [SubscriptionPoint]
     let threshold: Int
+    var connectPhase: ClaudeConnectController.Phase? = nil
+    var onConnect: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -49,8 +59,12 @@ struct SubscriptionCard: View {
             }
 
             if source.stale {
-                Label(source.staleReason ?? "sign-in required", systemImage: "key.slash")
-                    .font(.subheadline).foregroundStyle(.orange)
+                if needsReconnect, let onConnect {
+                    reconnectRow(onConnect)
+                } else {
+                    Label(source.staleReason ?? "sign-in required", systemImage: "key.slash")
+                        .font(.subheadline).foregroundStyle(.orange)
+                }
             }
 
             if let hot = windows.filter({ $0.usedPercent >= Double(threshold) })
@@ -112,6 +126,40 @@ struct SubscriptionCard: View {
         }
         .padding(12)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Reconnect is click-gated: this row is the ONLY way a keychain dialog can
+    /// appear, and only ever right after the user asked for it.
+    private var needsReconnect: Bool {
+        source.staleReason == ClaudeTokenResolver.reconnectReason
+    }
+
+    @ViewBuilder private func reconnectRow(_ onConnect: @escaping () -> Void) -> some View {
+        switch connectPhase {
+        case .connecting, .testingToken:
+            Label("waiting for macOS approval…", systemImage: "key")
+                .font(.subheadline).foregroundStyle(.secondary)
+        case .connected:
+            Label("connected ✓ — refreshing…", systemImage: "checkmark.circle")
+                .font(.subheadline).foregroundStyle(.green)
+        case .failed(let msg):
+            HStack(alignment: .firstTextBaseline) {
+                Label(msg, systemImage: "xmark.circle")
+                    .font(.subheadline).foregroundStyle(.red)
+                Spacer(minLength: 8)
+                Button("Retry") { onConnect() }.controlSize(.small)
+            }
+        default:
+            HStack(alignment: .firstTextBaseline) {
+                Label(windows.isEmpty ? "Connect to show limits — macOS asks once for Keychain access"
+                                      : "updates paused — reconnect to resume (last-known data below)",
+                      systemImage: "key.slash")
+                    .font(.subheadline).foregroundStyle(.orange)
+                Spacer(minLength: 8)
+                Button(windows.isEmpty ? "Connect…" : "Reconnect") { onConnect() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+        }
     }
 
     /// True once the series spans enough real time to draw a curve worth reading.
