@@ -6,6 +6,13 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.8] - 2026-07-21
+
+### Fixed
+- Rare post-update hang of the background service: if it hasn't come up
+  within 20 seconds of app launch, the app now repairs it automatically
+  (previously the "Repair background service" button in Settings was needed).
+
 ## [1.3.7] - 2026-07-21
 
 ### Changed

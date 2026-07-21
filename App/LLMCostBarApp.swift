@@ -9,10 +9,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? FileManager.default.removeItem(at: paths.cleanQuitMark)   // we're alive
         ensureDaemonRegistered()
+        scheduleDaemonHealthRecheck()
     }
 
     private func ensureDaemonRegistered() {
         DaemonManager.ensure(heartbeatURL: paths.heartbeat)
+    }
+
+    /// Self-heal for the post-update wedge (seen live on 1.3.6→1.3.7): the
+    /// installer's kickstart can race the freshly written bundle, the first
+    /// spawn dies on code signing, and launchd wedges the service record in
+    /// EX_CONFIG spawn failures instead of retrying. A full bootout/bootstrap
+    /// cycle clears it — run one automatically if the daemon hasn't written a
+    /// heartbeat within 20 s of app launch.
+    private func scheduleDaemonHealthRecheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+            let age = ((try? FileManager.default
+                .attributesOfItem(atPath: self.paths.heartbeat.path)[.modificationDate]) as? Date)
+                .map { Date().timeIntervalSince($0) }
+            let daemonLooksAlive = age.map { $0 < 60 } ?? false
+            if !daemonLooksAlive {
+                DaemonManager.ensure(heartbeatURL: self.paths.heartbeat, force: true)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
