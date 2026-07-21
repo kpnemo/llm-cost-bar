@@ -170,53 +170,30 @@ struct AccountsTab: View {
         .onAppear {
             claudeConnect.store = model.store
             claudeConnect.onChanged = { model.refresh() }
-            claudeConnect.refreshTokenPresence()
         }
     }
 
-    /// Claude-specific rows under the toggle: click-gated Connect/Reconnect and
-    /// the zero-prompt setup-token alternative.
+    /// Claude-specific rows under the toggle: the click-gated Reconnect and its
+    /// outcome. Failure text renders only while a reconnect is still needed —
+    /// once the daemon reports healthy again, stale feedback must not linger.
+    /// (The `claude setup-token` path was removed: Anthropic's usage endpoint
+    /// rejects setup-tokens — 403, missing user:profile scope.)
     @ViewBuilder private func claudeConnectRows(_ src: SubscriptionSourceRow) -> some View {
-        if src.stale && src.staleReason == ClaudeTokenResolver.reconnectReason
-            && !claudeConnect.setupTokenPresent {
+        let needsReconnect = src.stale && src.staleReason == ClaudeTokenResolver.reconnectReason
+        if needsReconnect {
             HStack {
                 Button(claudeButtonTitle) { claudeConnect.connect() }
                     .disabled(claudeConnect.phase == .connecting)
                 if claudeConnect.phase == .connecting { ProgressView().controlSize(.small) }
             }
+            if case .failed(let msg) = claudeConnect.phase {
+                Label(msg, systemImage: "xmark.circle").font(.caption).foregroundStyle(.red)
+            }
         }
-        switch claudeConnect.phase {
-        case .connected:
+        if claudeConnect.phase == .connected {
             Label("Connected ✓ — limits refresh within seconds", systemImage: "checkmark.circle")
                 .font(.caption).foregroundStyle(.green)
-        case .failed(let msg):
-            Label(msg, systemImage: "xmark.circle").font(.caption).foregroundStyle(.red)
-        default:
-            EmptyView()
         }
-        DisclosureGroup("Prefer never being asked? Connect with a token instead") {
-            VStack(alignment: .leading, spacing: 8) {
-                if claudeConnect.setupTokenPresent {
-                    Label("Using a setup-token — Keychain access to Claude Code's sign-in is never needed.",
-                          systemImage: "checkmark.seal")
-                        .font(.caption).foregroundStyle(.green)
-                    Button("Remove token") { claudeConnect.removeSetupToken() }
-                } else {
-                    Text("**Step 1.** In Terminal, run `claude setup-token` and approve in the browser — it prints a long-lived token (sk-ant-oat…).")
-                        .font(.callout)
-                    Text("**Step 2.** Copy the token, come back here, and click:")
-                        .font(.callout)
-                    Button("Paste token from clipboard & Test") { claudeConnect.pasteSetupToken() }
-                        .disabled(claudeConnect.phase == .testingToken)
-                    if claudeConnect.phase == .testingToken {
-                        Label("Testing token…", systemImage: "arrow.triangle.2.circlepath")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding(.vertical, 4)
-        }
-        .font(.caption)
     }
 
     private var claudeButtonTitle: String {

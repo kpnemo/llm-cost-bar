@@ -136,7 +136,7 @@ struct SubscriptionCard: View {
 
     @ViewBuilder private func reconnectRow(_ onConnect: @escaping () -> Void) -> some View {
         switch connectPhase {
-        case .connecting, .testingToken:
+        case .connecting:
             Label("waiting for macOS approval…", systemImage: "key")
                 .font(.subheadline).foregroundStyle(.secondary)
         case .connected:
