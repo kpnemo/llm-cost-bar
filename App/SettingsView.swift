@@ -229,6 +229,9 @@ struct AccountsTab: View {
 struct GeneralTab: View {
     @EnvironmentObject var model: StoreModel
     @EnvironmentObject var updater: UpdaterModel
+    @State private var repairState: RepairState = .idle
+
+    enum RepairState: Equatable { case idle, repairing, done, failed }
 
     var body: some View {
         Form {
@@ -289,18 +292,59 @@ struct GeneralTab: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
-                    Button("Repair background service") {
-                        DaemonManager.ensure(heartbeatURL: model.paths.heartbeat, force: true)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { model.refresh() }
+                    Button {
+                        repair()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("Repair background service")
+                            if repairState == .repairing { ProgressView().controlSize(.small) }
+                        }
                     }
+                    .disabled(repairState == .repairing)
                     Button("Open Login Items Settings…") {
                         SMAppService.openSystemSettingsLoginItems()
                     }
+                }
+                switch repairState {
+                case .repairing:
+                    Text("Restarting the service…").font(.caption).foregroundStyle(.secondary)
+                case .done:
+                    Label("Service is running again", systemImage: "checkmark.circle")
+                        .font(.caption).foregroundStyle(.green)
+                case .failed:
+                    Text("Still not responding after repair — check Login Items (button above), then try again.")
+                        .font(.caption).foregroundStyle(.orange)
+                case .idle:
+                    EmptyView()
                 }
             }
         }
         .formStyle(.grouped)
         .onChange(of: model.config) { model.saveConfig() }
+    }
+
+    /// The 3× launchctl cycle blocks for seconds — it froze the Settings window
+    /// when run on the main thread (reported live on 1.3.11). Run it detached
+    /// and detect completion by the daemon's own heartbeat instead of a blind
+    /// timer: fresh heartbeat = actually running, 12 s without one = failed.
+    private func repair() {
+        repairState = .repairing
+        let heartbeat = model.paths.heartbeat
+        Task.detached {
+            DaemonManager.ensure(heartbeatURL: heartbeat, force: true)
+            var healthy = false
+            for _ in 0..<24 {   // up to ~12 s
+                try? await Task.sleep(for: .milliseconds(500))
+                let age = ((try? FileManager.default
+                    .attributesOfItem(atPath: heartbeat.path)[.modificationDate]) as? Date)
+                    .map { Date().timeIntervalSince($0) }
+                if let age, age < 10 { healthy = true; break }
+            }
+            await MainActor.run {
+                repairState = healthy ? .done : .failed
+                model.refresh()
+            }
+        }
     }
 
     /// The manual check button hides while an update is known (the UpdateRow's

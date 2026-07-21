@@ -6,6 +6,20 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.12] - 2026-07-22
+
+### Fixed
+- Root cause of the recurring ~30 s "daemon not responding" window after
+  updates: a legacy SMAppService/BTM registration for llmcostd (from before
+  the switch to a classic LaunchAgent) was still enabled and re-submitted
+  the daemon at every login/update — with a launch constraint — racing the
+  LaunchAgent for the same launchd label. The app now unregisters that
+  record on every launch until it is gone, and logs the outcome.
+- "Repair background service" no longer freezes the Settings window: the
+  launchctl cycle runs in the background with a progress state, and the
+  button reports success by the daemon's own heartbeat (or a clear failure
+  message after 12 s) instead of silently returning.
+
 ## [1.3.11] - 2026-07-22
 
 ### Added
