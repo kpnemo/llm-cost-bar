@@ -6,6 +6,17 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.11] - 2026-07-22
+
+### Added
+- Test hook for the reconnect flow: creating the file
+  `debug-drop-claude-cache` in `~/Library/Application Support/LLMCostBar/`
+  makes the background service forget its cached Claude token on the next
+  poll — the same state a real overnight token rotation leaves behind. With
+  Keychain access intact the silent probe recovers invisibly; with access
+  revoked the Claude card shows Reconnect. Lets the quiet-keychain promise
+  be verified on demand instead of waiting ~8-12 h for a real rotation.
+
 ## [1.3.10] - 2026-07-22
 
 ### Removed

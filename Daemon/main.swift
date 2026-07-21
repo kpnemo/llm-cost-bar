@@ -60,6 +60,20 @@ func consumeSyncTrigger() -> Bool {
     return true
 }
 
+/// Test hook: `touch ~/Library/Application Support/LLMCostBar/debug-drop-claude-cache`
+/// makes the next poll forget the vault-cached Claude token — the same state a
+/// real token rotation leaves behind. With Keychain access intact the silent
+/// no-UI probe re-seeds the cache (nothing visible); with access revoked the
+/// card flips to "needs reconnect". The only way to exercise the reconnect
+/// flow without waiting ~8-12 h for Claude Code's own rotation.
+func consumeDropClaudeCacheTrigger() {
+    let trigger = paths.base.appendingPathComponent("debug-drop-claude-cache")
+    guard FileManager.default.fileExists(atPath: trigger.path) else { return }
+    try? FileManager.default.removeItem(at: trigger)
+    try? keychain.deleteKey(accountID: ClaudeTokenResolver.cacheVaultKey)
+    log.info("debug: dropped vault-cached Claude token (test hook)")
+}
+
 /// Relaunch the app only if it is not running AND it did not exit cleanly
 /// (the app writes cleanQuitMark on normal quit and removes it on launch).
 func watchdog(config: AppConfig) {
@@ -89,6 +103,7 @@ Task {
         }
         if triggered || Date().timeIntervalSince(lastSubscriptionSync) >= subscriptionInterval {
             lastSubscriptionSync = Date()
+            consumeDropClaudeCacheTrigger()
             await subscriptionEngine.syncAll()
         }
         watchdog(config: config)
