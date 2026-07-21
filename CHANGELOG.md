@@ -6,6 +6,14 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.6] - 2026-07-21
+
+### Fixed
+- The subscriptions sparkline no longer renders as an odd flat line when only
+  a few hours of history exist: it now waits for ≥12 h of data, pins its
+  x-axis to the true 7-day window (young data grows in from the right), and
+  gains a subtle area fill.
+
 ## [1.3.5] - 2026-07-21
 
 ### Changed

@@ -82,8 +82,19 @@ struct SubscriptionCard: View {
                 .accessibilityLabel("\(displayName) \(w.label) window, \(Int(w.usedPercent)) percent used, \(resetText(w))")
             }
 
-            if series.count >= 2 {
+            // Sparkline appears once ≥12 h of history exists — with less, two
+            // near-identical points stretch into a context-free flat line that
+            // reads as broken. The x-axis is pinned to the full 7-day window so
+            // young data grows in from the right edge instead of filling the
+            // width dishonestly.
+            if seriesIsMeaningful {
                 Chart(series, id: \.self) { p in
+                    AreaMark(x: .value("Time", p.bucketStart),
+                             y: .value("%", p.usedPercent))
+                        .foregroundStyle(.linearGradient(
+                            colors: [.blue.opacity(0.22), .blue.opacity(0.02)],
+                            startPoint: .top, endPoint: .bottom))
+                        .interpolationMethod(.monotone)
                     LineMark(x: .value("Time", p.bucketStart),
                              y: .value("%", p.usedPercent))
                         .foregroundStyle(.blue.opacity(0.7))
@@ -91,6 +102,7 @@ struct SubscriptionCard: View {
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
+                .chartXScale(domain: Date().addingTimeInterval(-7 * 86400)...Date())
                 .chartYScale(domain: 0...100)
                 .frame(height: 36)
                 .padding(.top, 2)
@@ -100,6 +112,12 @@ struct SubscriptionCard: View {
         }
         .padding(12)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// True once the series spans enough real time to draw a curve worth reading.
+    private var seriesIsMeaningful: Bool {
+        guard series.count >= 2, let oldest = series.first?.bucketStart else { return false }
+        return Date().timeIntervalSince(oldest) >= 12 * 3600
     }
 
     // MARK: presentation helpers
