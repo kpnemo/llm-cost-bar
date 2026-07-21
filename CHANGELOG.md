@@ -6,6 +6,13 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.7] - 2026-07-21
+
+### Changed
+- Installing an update from Settings now shows the same live progress as the
+  popover row: download percentage, "installing — restarting…", success and
+  retry states.
+
 ## [1.3.6] - 2026-07-21
 
 ### Fixed

@@ -226,16 +226,16 @@ struct GeneralTab: View {
             Section("Updates") {
                 LabeledContent("Version", value: updater.currentVersion)
                 Toggle("Check for updates automatically (daily)", isOn: $model.config.autoCheckUpdates)
-                HStack {
-                    if let release = updater.availableRelease {
-                        Button("Install v\(release.version)") { updater.install() }
-                            .buttonStyle(.borderedProminent)
-                    } else {
+                // The exact same state row as the popover: available → Install,
+                // download progress, installing, ✓ updated, failed + Retry.
+                UpdateRow()
+                if showsCheckButton {
+                    HStack {
                         Button("Check for Updates…") { Task { await updater.check() } }
                             .disabled(updater.phase == .checking)
-                    }
-                    if updater.phase == .checking {
-                        ProgressView().controlSize(.small)
+                        if updater.phase == .checking {
+                            ProgressView().controlSize(.small)
+                        }
                     }
                 }
                 if let status = updateStatusLine {
@@ -266,6 +266,16 @@ struct GeneralTab: View {
         }
         .formStyle(.grouped)
         .onChange(of: model.config) { model.saveConfig() }
+    }
+
+    /// The manual check button hides while an update is known (the UpdateRow's
+    /// Install takes over) or an install is in flight.
+    private var showsCheckButton: Bool {
+        guard updater.availableRelease == nil else { return false }
+        switch updater.phase {
+        case .downloading, .installing: return false
+        default: return true
+        }
     }
 
     private var updateStatusLine: String? {
