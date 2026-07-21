@@ -289,10 +289,12 @@ struct DiagnosticsTab: View {
             }
             HStack {
                 Button("Copy diagnostics") {
-                    let text = model.syncLog.map {
+                    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+                    let header = "LLM Cost Bar v\(version) — \(ISO8601DateFormatter().string(from: Date()))"
+                    let text = ([header] + model.syncLog.map {
                         "\($0.ts) [\($0.errorClass)] \($0.vendor)/\($0.accountID) \($0.endpoint) " +
                         "status=\($0.httpStatus.map(String.init) ?? "-") \($0.message) \($0.snippet ?? "")"
-                    }.joined(separator: "\n")
+                    }).joined(separator: "\n")
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
                 }
