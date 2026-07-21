@@ -111,6 +111,16 @@ final class StoreModel: ObservableObject {
         return Date().timeIntervalSince(hb) < 60
     }
 
+    /// Three-state daemon status for UI. The update flow deliberately stops
+    /// the daemon before swapping the bundle, so right after (re)launch a
+    /// missing heartbeat means "coming up", not "broken" — showing an orange
+    /// "not responding" in that window scared users (reported on 1.3.12).
+    enum DaemonState { case starting, running, notResponding }
+    var daemonState: DaemonState {
+        if daemonHealthy { return .running }
+        return Date().timeIntervalSince(launchedAt) < 120 ? .starting : .notResponding
+    }
+
     var menuBarTitle: String {
         switch config.menuBarDisplay {
         case .iconOnly: ""

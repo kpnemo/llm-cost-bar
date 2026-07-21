@@ -27,12 +27,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static func purgeLegacyBTMRegistration() {
         let sm = SMAppService.agent(plistName: "com.mikeb.llmcostd.plist")
         let status = sm.status
-        guard status == .enabled || status == .requiresApproval else { return }
+        // Attempt unconditionally (except when the plist is missing from the
+        // bundle): on 1.3.12 the status-gated version silently skipped — the
+        // BTM record stayed "enabled" in dumpbtm while SMAppService reported
+        // a different status for the current bundle generation. A redundant
+        // unregister on an unregistered service is a harmless error we log.
+        guard status != .notFound else { return }
         do {
             try sm.unregister()
-            NSLog("LLMCostBar: unregistered legacy BTM daemon record (status was %d)", status.rawValue)
+            NSLog("LLMCostBar: BTM unregister ok (status was %d)", status.rawValue)
         } catch {
-            NSLog("LLMCostBar: legacy BTM unregister FAILED: %@", String(describing: error))
+            NSLog("LLMCostBar: BTM unregister (status %d): %@", status.rawValue, String(describing: error))
         }
     }
 
