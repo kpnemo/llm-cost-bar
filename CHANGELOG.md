@@ -6,6 +6,12 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.5] - 2026-07-21
+
+### Changed
+- "Copy diagnostics" now includes the app version and timestamp — handy when
+  reporting an issue.
+
 ## [1.3.4] - 2026-07-21
 
 ### Changed
