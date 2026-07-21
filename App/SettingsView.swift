@@ -26,6 +26,7 @@ struct SettingsView: View {
 struct AccountsTab: View {
     @EnvironmentObject var model: StoreModel
     @EnvironmentObject var pairing: PairingController
+    @EnvironmentObject var claudeConnect: ClaudeConnectController
     @State private var showAddFlow = false
     @State private var selectedProvider = "OpenRouter"
     @State private var newName = "personal"
@@ -91,9 +92,8 @@ struct AccountsTab: View {
                 The first time the background sync service reads it, macOS asks for \
                 permission (“llmcostd wants to access…”): click **Always Allow** \
                 once and it never asks again, no matter how many providers you add. \
-                If you also use the Subscriptions tab with Claude, there is one more \
-                read-only prompt for Claude Code's sign-in. That's it — at most two \
-                Keychain prompts, ever.
+                The app never asks from the background: a Keychain dialog can only \
+                appear right after you click Connect or Reconnect.
                 """)
                 .font(.caption).foregroundStyle(.secondary)
             }
@@ -119,9 +119,12 @@ struct AccountsTab: View {
                         }
                     }
                     .toggleStyle(.switch)
+                    if src.source == SubscriptionSource.claude && src.enabled {
+                        claudeConnectRows(src)
+                    }
                 }
                 if model.subscriptionSources.contains(where: { $0.source == SubscriptionSource.claude }) {
-                    Text("Claude limits reuse Claude Code's sign-in from your Keychain (read-only). When macOS asks, click “Always Allow”.")
+                    Text("Claude limits reuse Claude Code's sign-in from your Keychain, read-only. Connecting asks for Keychain access once; after that the app never prompts on its own — if access is lost (Claude Code rotates its sign-in), a Reconnect button appears instead.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -164,6 +167,61 @@ struct AccountsTab: View {
         .onChange(of: pairing.state) {
             if pairing.state == .done { showAddFlow = false }
         }
+        .onAppear {
+            claudeConnect.store = model.store
+            claudeConnect.onChanged = { model.refresh() }
+            claudeConnect.refreshTokenPresence()
+        }
+    }
+
+    /// Claude-specific rows under the toggle: click-gated Connect/Reconnect and
+    /// the zero-prompt setup-token alternative.
+    @ViewBuilder private func claudeConnectRows(_ src: SubscriptionSourceRow) -> some View {
+        if src.stale && src.staleReason == ClaudeTokenResolver.reconnectReason
+            && !claudeConnect.setupTokenPresent {
+            HStack {
+                Button(claudeButtonTitle) { claudeConnect.connect() }
+                    .disabled(claudeConnect.phase == .connecting)
+                if claudeConnect.phase == .connecting { ProgressView().controlSize(.small) }
+            }
+        }
+        switch claudeConnect.phase {
+        case .connected:
+            Label("Connected ✓ — limits refresh within seconds", systemImage: "checkmark.circle")
+                .font(.caption).foregroundStyle(.green)
+        case .failed(let msg):
+            Label(msg, systemImage: "xmark.circle").font(.caption).foregroundStyle(.red)
+        default:
+            EmptyView()
+        }
+        DisclosureGroup("Prefer never being asked? Connect with a token instead") {
+            VStack(alignment: .leading, spacing: 8) {
+                if claudeConnect.setupTokenPresent {
+                    Label("Using a setup-token — Keychain access to Claude Code's sign-in is never needed.",
+                          systemImage: "checkmark.seal")
+                        .font(.caption).foregroundStyle(.green)
+                    Button("Remove token") { claudeConnect.removeSetupToken() }
+                } else {
+                    Text("**Step 1.** In Terminal, run `claude setup-token` and approve in the browser — it prints a long-lived token (sk-ant-oat…).")
+                        .font(.callout)
+                    Text("**Step 2.** Copy the token, come back here, and click:")
+                        .font(.callout)
+                    Button("Paste token from clipboard & Test") { claudeConnect.pasteSetupToken() }
+                        .disabled(claudeConnect.phase == .testingToken)
+                    if claudeConnect.phase == .testingToken {
+                        Label("Testing token…", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .font(.caption)
+    }
+
+    private var claudeButtonTitle: String {
+        model.subscriptionWindows.contains { $0.source == SubscriptionSource.claude }
+            ? "Reconnect Claude…" : "Connect Claude — macOS will ask once…"
     }
 
     private func subscriptionStatus(_ src: SubscriptionSourceRow) -> String {

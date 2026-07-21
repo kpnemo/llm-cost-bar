@@ -98,8 +98,9 @@ cap, and when does it reset" — in two clicks.
 
 5. **Zero-setup detection** — No keys to paste. If Claude Code or Codex CLI
    is signed in on your Mac, the app finds it and reuses that sign-in
-   *read-only* (one "Always Allow" Keychain click for Claude, nothing for
-   Codex). It never refreshes or touches the CLI's tokens.
+   *read-only* (one click-approved Keychain grant for Claude, nothing for
+   Codex). It never refreshes or touches the CLI's tokens, and it never asks
+   from the background.
 
 6. **Know before you hit the wall** — A macOS notification fires when any
    window crosses your threshold (default 80%, configurable), re-arming after
@@ -162,10 +163,14 @@ See PRIVACY.md in the repo.
 **Why does macOS ask about Keychain access?**
 Your keys live only in the macOS Keychain, and the background sync service is
 a separate binary from the app — so macOS asks once before letting it read
-them. All keys share a single Keychain item, so you'll see at most **two**
-prompts ever: one for your vendor keys (however many providers you add), and
-a read-only one for Claude Code's sign-in if you use the Subscriptions tab.
-Click "Always Allow" and neither returns.
+them (click "Always Allow"). All keys share a single Keychain item, so adding
+more providers never adds prompts. Connecting Claude limits asks once too —
+and only when **you** click Connect. The app never prompts from the
+background: if macOS revokes access (Claude Code rotates its sign-in
+regularly, which resets consent), the Claude card keeps showing last-known
+data with a Reconnect button, and the one prompt happens right after you
+click it. Prefer zero prompts ever? Connect Claude with a `claude
+setup-token` instead (Settings → Accounts).
 
 **I don't use API keys, just Claude Max / ChatGPT Plus. Is this for me?**
 Yes — that's exactly what the Subscriptions tab is for. Skip the API-key
@@ -176,8 +181,9 @@ limits appear automatically.
 It reuses the sign-in Claude Code already stores in your macOS Keychain —
 read-only, never modified or refreshed, never sent anywhere except
 Anthropic's own API (the same endpoint Claude Code's `/usage` command
-calls). macOS asks once; click "Always Allow". If you'd rather not, one
-toggle turns the whole source off. Honest caveat: the limit endpoints are
+calls). macOS asks once, when you click Connect; afterwards the app never
+prompts on its own. If you'd rather not, one toggle turns the whole source
+off. Honest caveat: the limit endpoints are
 unofficial (the same ones the vendors' own CLIs use) — if a vendor changes
 them, cards show last-known data marked stale until an app update; spend
 tracking is unaffected.

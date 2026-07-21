@@ -1,6 +1,41 @@
 import XCTest
 @testable import LLMCostBarCore
 
+/// Scriptable credential source; offers each retry token at most once.
+final class ScriptedClaudeSource: ClaudeCredentialSource, @unchecked Sendable {
+    var resolution: ClaudeTokenResolution
+    var retryToken: ResolvedClaudeToken?
+    var reason = "needs reconnect — click Reconnect on the Claude card"
+    var after401Count = 0
+    init(_ resolution: ClaudeTokenResolution) { self.resolution = resolution }
+    func resolve() -> ClaudeTokenResolution { resolution }
+    func after401(failedToken: String, source: ResolvedClaudeToken.Source)
+    -> (retry: ResolvedClaudeToken?, reason: String) {
+        after401Count += 1
+        defer { retryToken = nil }
+        return (retryToken, reason)
+    }
+}
+
+/// Pops one scripted (body, status) per request; records every auth header sent.
+final class SequencedHTTP: HTTPClient, @unchecked Sendable {
+    var queue: [(String, Int)] = []
+    var authHeadersSeen: [String] = []
+    init(_ queue: [(String, Int)]) { self.queue = queue }
+    func get(_ url: URL, bearer: String) async throws -> (Data, Int) {
+        throw ProviderError.transient("unused")
+    }
+    func post(_ url: URL, json: [String: String]) async throws -> (Data, Int) {
+        throw ProviderError.transient("unused")
+    }
+    func get(_ url: URL, headers: [String: String]) async throws -> (Data, Int) {
+        authHeadersSeen.append(headers["Authorization"] ?? "")
+        guard !queue.isEmpty else { throw ProviderError.transient("script exhausted") }
+        let (body, status) = queue.removeFirst()
+        return (Data(body.utf8), status)
+    }
+}
+
 final class ClaudeSubscriptionProviderTests: XCTestCase {
     // Recorded shape of GET api.anthropic.com/api/oauth/usage (community-verified).
     let oauthUsageJSON = #"""
@@ -17,10 +52,12 @@ final class ClaudeSubscriptionProviderTests: XCTestCase {
     """#
     let now = ISO8601DateFormatter().date(from: "2026-07-21T10:00:00Z")!
 
-    func makeProvider(_ http: FakeHTTP,
-                      state: ClaudeCredentialState = .found(accessToken: "tok-abc", subscriptionType: "max_5x"))
+    func makeProvider(_ http: any HTTPClient,
+                      source: ScriptedClaudeSource = ScriptedClaudeSource(.found(
+                          ResolvedClaudeToken(accessToken: "tok-abc", subscriptionType: "max_5x",
+                                              source: .cache))))
     -> ClaudeSubscriptionProvider {
-        ClaudeSubscriptionProvider(http: http, credentials: { state }, detect: { true })
+        ClaudeSubscriptionProvider(http: http, credentials: source, detect: { true })
     }
 
     func testParsesAllWindowsAndSendsLoadBearingHeaders() async throws {
@@ -45,25 +82,64 @@ final class ClaudeSubscriptionProviderTests: XCTestCase {
         XCTAssertEqual(snap.windows[0].usedPercent, 100)   // 150 → clamped
     }
 
-    func test401SurfacesAsAuthWithActionableReason() async throws {
+    func test401WithoutReplacementSurfacesAsAuthWithSourceReason() async throws {
         let http = FakeHTTP(); http.responses["/api/oauth/usage"] = (#"{"error":"expired"}"#, 401)
+        let source = ScriptedClaudeSource(.found(
+            ResolvedClaudeToken(accessToken: "tok-dead", subscriptionType: nil, source: .cache)))
         do {
-            _ = try await makeProvider(http).fetchSnapshot(now: now)
+            _ = try await makeProvider(http, source: source).fetchSnapshot(now: now)
             XCTFail("expected auth error")
         } catch let ProviderError.auth(status, reason) {
             XCTAssertEqual(status, 401)
-            XCTAssertTrue(reason.contains("Claude Code"))
+            XCTAssertEqual(reason, source.reason)
+            XCTAssertEqual(source.after401Count, 1)
         }
     }
 
-    func testDeniedKeychainSurfacesAsAuthWithReason() async throws {
-        let http = FakeHTTP()
+    func test401RecoversSilentlyWithReplacementToken() async throws {
+        let http = SequencedHTTP([(#"{"error":"expired"}"#, 401), (oauthUsageJSON, 200)])
+        let source = ScriptedClaudeSource(.found(
+            ResolvedClaudeToken(accessToken: "tok-dead", subscriptionType: "max_5x", source: .cache)))
+        source.retryToken = ResolvedClaudeToken(accessToken: "tok-rotated",
+                                                subscriptionType: "max_20x", source: .cache)
+        let snap = try await makeProvider(http, source: source).fetchSnapshot(now: now)
+        XCTAssertEqual(http.authHeadersSeen, ["Bearer tok-dead", "Bearer tok-rotated"])
+        XCTAssertEqual(snap.planType, "max_20x")   // plan follows the token that worked
+        XCTAssertEqual(snap.windows.count, 4)
+    }
+
+    func test401TwiceGivesUpWithAuthError() async throws {
+        let http = SequencedHTTP([(#"{"error":"expired"}"#, 401), (#"{"error":"expired"}"#, 401)])
+        let source = ScriptedClaudeSource(.found(
+            ResolvedClaudeToken(accessToken: "tok-dead", subscriptionType: nil, source: .cache)))
+        source.retryToken = ResolvedClaudeToken(accessToken: "tok-also-dead",
+                                                subscriptionType: nil, source: .cache)
         do {
-            _ = try await makeProvider(http, state: .denied("grant llmcostd access — click Always Allow"))
+            _ = try await makeProvider(http, source: source).fetchSnapshot(now: now)
+            XCTFail("expected auth error")
+        } catch let ProviderError.auth(status, _) {
+            XCTAssertEqual(status, 401)
+            XCTAssertEqual(http.authHeadersSeen.count, 2)   // exactly one retry, never a loop
+        }
+    }
+
+    func testReconnectNeededSurfacesAsAuthWithReconnectReason() async throws {
+        do {
+            _ = try await makeProvider(FakeHTTP(), source: ScriptedClaudeSource(.reconnectNeeded))
                 .fetchSnapshot(now: now)
             XCTFail("expected auth error")
         } catch let ProviderError.auth(_, reason) {
-            XCTAssertTrue(reason.contains("Always Allow"))
+            XCTAssertEqual(reason, ClaudeTokenResolver.reconnectReason)
+        }
+    }
+
+    func testSignedOutSurfacesAsAuth() async throws {
+        do {
+            _ = try await makeProvider(FakeHTTP(), source: ScriptedClaudeSource(.signedOut))
+                .fetchSnapshot(now: now)
+            XCTFail("expected auth error")
+        } catch let ProviderError.auth(_, reason) {
+            XCTAssertTrue(reason.contains("sign in to Claude Code"))
         }
     }
 

@@ -6,6 +6,26 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.9] - 2026-07-21
+
+### Changed
+- **Keychain dialogs can no longer appear out of nowhere.** Claude Code
+  rotates its sign-in token every few hours, and macOS resets Keychain
+  consent each time — so the background service used to trigger a "llmcostd
+  wants to access…" dialog roughly daily, and "Always Allow" couldn't stick.
+  Now the background service is incapable of prompting: it reads a copy of
+  the token cached in the app's own Keychain item, silently re-reads Claude
+  Code's item only in no-prompt mode, and when that fails it just marks the
+  Claude card "needs reconnect" while keeping last-known data on screen.
+  A Keychain dialog appears only right after you click Connect or Reconnect.
+- New optional zero-prompt path: connect Claude with a long-lived
+  `claude setup-token` (Settings → Accounts → "connect with a token
+  instead"). The token is tested live before it's stored and takes
+  precedence over Keychain reads.
+- Upgrades from 1.3.8 usually need no action: if the background service
+  still holds a valid Keychain grant, the first silent probe seeds the cache
+  automatically.
+
 ## [1.3.8] - 2026-07-21
 
 ### Fixed
