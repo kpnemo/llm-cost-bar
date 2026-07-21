@@ -8,8 +8,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? FileManager.default.removeItem(at: paths.cleanQuitMark)   // we're alive
-        ensureDaemonRegistered()
+        // Off the main thread: BTM unregister + 3× launchctl block for seconds.
+        DispatchQueue.global(qos: .userInitiated).async {
+            Self.purgeLegacyBTMRegistration()
+            self.ensureDaemonRegistered()
+        }
         scheduleDaemonHealthRecheck()
+    }
+
+    /// Kill the pre-LaunchAgent SMAppService registration for good. Seen live
+    /// 2026-07-22: BTM still held an ENABLED record for llmcostd (generation
+    /// 20, "submitted by smd", with a launch constraint) that re-submits at
+    /// every login/update and races the classic LaunchAgent for the same
+    /// label — the recurring post-update "daemon not responding" window. The
+    /// old cleanup inside DaemonManager.ensure ran only when the plist
+    /// changed and swallowed errors; this runs EVERY launch until the record
+    /// is gone, and logs the outcome.
+    private static func purgeLegacyBTMRegistration() {
+        let sm = SMAppService.agent(plistName: "com.mikeb.llmcostd.plist")
+        let status = sm.status
+        guard status == .enabled || status == .requiresApproval else { return }
+        do {
+            try sm.unregister()
+            NSLog("LLMCostBar: unregistered legacy BTM daemon record (status was %d)", status.rawValue)
+        } catch {
+            NSLog("LLMCostBar: legacy BTM unregister FAILED: %@", String(describing: error))
+        }
     }
 
     private func ensureDaemonRegistered() {
@@ -29,7 +53,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .map { Date().timeIntervalSince($0) }
             let daemonLooksAlive = age.map { $0 < 60 } ?? false
             if !daemonLooksAlive {
-                DaemonManager.ensure(heartbeatURL: self.paths.heartbeat, force: true)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    DaemonManager.ensure(heartbeatURL: self.paths.heartbeat, force: true)
+                }
             }
         }
     }
