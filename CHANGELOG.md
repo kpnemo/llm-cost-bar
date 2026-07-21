@@ -6,6 +6,18 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.13] - 2026-07-22
+
+### Fixed
+- Settings no longer shows an alarming orange "not responding" during the
+  normal post-update window: while the service is being re-armed (first
+  ~2 min after app launch) it now reads "starting…" in grey, matching the
+  popover's existing grace period. Orange is reserved for an actually dead
+  service.
+- The legacy-BTM purge from 1.3.12 could be skipped by SMAppService's
+  status reporting (the record stayed "enabled" in dumpbtm); the unregister
+  now runs unconditionally at every launch and logs its outcome either way.
+
 ## [1.3.12] - 2026-07-22
 
 ### Fixed

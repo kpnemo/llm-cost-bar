@@ -283,11 +283,17 @@ struct GeneralTab: View {
 
             Section("Background service") {
                 LabeledContent("Daemon") {
-                    Label(model.daemonHealthy ? "running" : "not responding",
-                          systemImage: model.daemonHealthy ? "checkmark.circle" : "exclamationmark.triangle")
-                        .foregroundStyle(model.daemonHealthy ? .green : .orange)
+                    switch model.daemonState {
+                    case .running:
+                        Label("running", systemImage: "checkmark.circle").foregroundStyle(.green)
+                    case .starting:
+                        Label("starting…", systemImage: "clock").foregroundStyle(.secondary)
+                    case .notResponding:
+                        Label("not responding", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
                 }
-                if !model.daemonHealthy {
+                if model.daemonState == .notResponding {
                     Text("If repairing doesn't help, make sure “LLM Cost Bar” is allowed in System Settings → General → Login Items & Extensions.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
