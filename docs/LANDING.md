@@ -169,8 +169,7 @@ and only when **you** click Connect. The app never prompts from the
 background: if macOS revokes access (Claude Code rotates its sign-in
 regularly, which resets consent), the Claude card keeps showing last-known
 data with a Reconnect button, and the one prompt happens right after you
-click it. Prefer zero prompts ever? Connect Claude with a `claude
-setup-token` instead (Settings → Accounts).
+click it.
 
 **I don't use API keys, just Claude Max / ChatGPT Plus. Is this for me?**
 Yes — that's exactly what the Subscriptions tab is for. Skip the API-key

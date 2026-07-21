@@ -6,6 +6,21 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.10] - 2026-07-22
+
+### Removed
+- The "connect with a token instead" (`claude setup-token`) option: verified
+  live that Anthropic's usage endpoint rejects setup-tokens (403, missing
+  `user:profile` scope), so the path cannot work. The quiet-keychain flow
+  from 1.3.9 (silent background + click-gated Reconnect) is the supported
+  way to connect Claude. The vault-side plumbing stays parked in Core in
+  case Anthropic ever opens the scope.
+
+### Fixed
+- A connect/token error shown in Settings no longer lingers after the
+  Claude source is healthy again — failure text now clears as soon as a
+  reconnect is no longer needed.
+
 ## [1.3.9] - 2026-07-21
 
 ### Changed
