@@ -112,7 +112,13 @@ enum DaemonManager {
             .attributesOfItem(atPath: heartbeatURL.path)[.modificationDate] as? Date)
             .map { Date().timeIntervalSince($0) }
         let daemonLooksAlive = heartbeatAge.map { $0 < 120 } ?? false
-        guard force || changed || !daemonLooksAlive else { return }
+        // The heartbeat file survives the process: right after an update
+        // (installer boots the service out before the bundle swap) it can be
+        // seconds old while NOTHING is registered — trusting it left the
+        // daemon unarmed until the 20 s safety net (seen live twice on
+        // 2026-07-22). launchd itself is the authority on registration.
+        let registered = runLaunchctl(["print", "gui/\(getuid())/\(label)"]) == 0
+        guard force || changed || !registered || !daemonLooksAlive else { return }
 
         try? FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
@@ -134,12 +140,16 @@ enum DaemonManager {
         runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])
     }
 
-    private static func runLaunchctl(_ args: [String]) {
+    @discardableResult
+    private static func runLaunchctl(_ args: [String]) -> Int32 {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         p.arguments = args
-        try? p.run()
+        p.standardOutput = FileHandle.nullDevice   // `print` dumps pages we don't need
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return -1 }
         p.waitUntilExit()
+        return p.terminationStatus
     }
 }
 

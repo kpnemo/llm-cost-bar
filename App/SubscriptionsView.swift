@@ -64,6 +64,7 @@ struct SubscriptionCard: View {
                 } else {
                     Label(source.staleReason ?? "sign-in required", systemImage: "key.slash")
                         .font(.subheadline).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -143,18 +144,21 @@ struct SubscriptionCard: View {
             Label("connected ✓ — refreshing…", systemImage: "checkmark.circle")
                 .font(.subheadline).foregroundStyle(.green)
         case .failed(let msg):
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .top) {
+                // Wrap, never truncate: these lines tell the user what to DO.
                 Label(msg, systemImage: "xmark.circle")
                     .font(.subheadline).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 Button("Retry") { onConnect() }.controlSize(.small)
             }
         default:
-            HStack(alignment: .firstTextBaseline) {
-                Label(windows.isEmpty ? "Connect to show limits — macOS asks once for Keychain access"
-                                      : "updates paused — reconnect to resume (last-known data below)",
+            HStack(alignment: .top) {
+                Label(windows.isEmpty ? "Connect to show limits — macOS asks once"
+                                      : "updates paused — showing last-known data",
                       systemImage: "key.slash")
                     .font(.subheadline).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 Button(windows.isEmpty ? "Connect…" : "Reconnect") { onConnect() }
                     .buttonStyle(.borderedProminent).controlSize(.small)

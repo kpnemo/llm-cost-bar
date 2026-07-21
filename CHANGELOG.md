@@ -6,6 +6,17 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.15] - 2026-07-22
+
+### Fixed
+- Claude card: the "updates paused" line no longer truncates ("last-know…")
+  — the message was shortened and all reconnect/status texts now wrap to a
+  second line instead of clipping.
+- After an update the background service could sit unregistered until the
+  20 s safety net fired: the re-arm check trusted the age of the heartbeat
+  file, which survives the stopped process. The app now asks launchd
+  directly whether the service is registered.
+
 ## [1.3.14] - 2026-07-22
 
 ### Fixed
