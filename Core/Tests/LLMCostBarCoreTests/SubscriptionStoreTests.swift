@@ -101,6 +101,19 @@ final class SubscriptionStoreTests: XCTestCase {
         XCTAssertEqual(try store.subscriptionSources().first?.enabled, false)
     }
 
+    func testClearSubscriptionStale() throws {
+        // The app calls this optimistically right after a successful reconnect
+        // so the card recovers instantly instead of waiting out the daemon's
+        // next poll (users clicked Reconnect 3× thinking it hadn't worked).
+        let store = try makeStore()
+        try store.registerSubscriptionSource(source: "claude")
+        try store.markSubscriptionStale(source: "claude", reason: "needs reconnect")
+        try store.clearSubscriptionStale(source: "claude")
+        let row = try store.subscriptionSources().first
+        XCTAssertEqual(row?.stale, false)
+        XCTAssertNil(row?.staleReason)
+    }
+
     func testStaleMarkAndRecovery() throws {
         let store = try makeStore()
         try store.registerSubscriptionSource(source: "claude")
