@@ -40,6 +40,12 @@ final class ClaudeConnectController: ObservableObject {
             }
             do {
                 try keychain.setKey(cache.encodedJSON, accountID: ClaudeTokenResolver.cacheVaultKey)
+                // Optimistic: heal the card NOW. Waiting for the daemon's
+                // confirmation left the Reconnect button visible for up to
+                // ~90 s after a successful reconnect — users clicked it three
+                // times thinking it failed (seen live 2026-07-22). If the new
+                // token is bad, the next sync re-marks stale.
+                try? store?.clearSubscriptionStale(source: SubscriptionSource.claude)
                 requestSync()
                 settleConnected()
                 logConnect(errorClass: "ok", message: "connect: Claude token cached in vault")
@@ -60,8 +66,11 @@ final class ClaudeConnectController: ObservableObject {
     /// LATER staleness would resurface a card still claiming "connected ✓".
     private func settleConnected() {
         phase = .connected
+        // Long enough to outlive a full daemon confirmation cycle: while
+        // .connected the card shows "refreshing…" instead of flipping back to
+        // an actionable Reconnect button mid-sync.
         Task {
-            try? await Task.sleep(for: .seconds(8))
+            try? await Task.sleep(for: .seconds(30))
             if self.phase == .connected { self.phase = .idle }
         }
     }

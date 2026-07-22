@@ -57,6 +57,16 @@ extension UsageStore {
         }
     }
 
+    /// Optimistic recovery (app-side, right after a successful reconnect): the
+    /// card heals instantly; the daemon's next sync re-marks stale if the new
+    /// credential turns out bad.
+    public func clearSubscriptionStale(source: String) throws {
+        try db.write { db in
+            try db.execute(sql: "UPDATE subscription_sources SET stale = 0, stale_reason = NULL WHERE source = ?",
+                           arguments: [source])
+        }
+    }
+
     // MARK: alert_events (daemon writes, app delivers)
 
     public func insertAlertEvent(rule: String, message: String, now: Date = Date()) throws {

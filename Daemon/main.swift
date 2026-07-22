@@ -97,14 +97,18 @@ Task {
     while true {
         let config = AppConfig.load(from: paths.config)
         let triggered = consumeSyncTrigger()
-        if triggered || Date().timeIntervalSince(lastSync) >= Double(config.refreshMinutes) * 60 {
-            lastSync = Date()
-            await engine.syncAll()
-        }
+        // Subscriptions BEFORE vendor spend: they're two quick HTTP calls,
+        // while vendor sync can take a minute+. A manual trigger is often a
+        // reconnect confirmation — making it wait behind vendor sync left the
+        // Reconnect card unhealed for ~90 s.
         if triggered || Date().timeIntervalSince(lastSubscriptionSync) >= subscriptionInterval {
             lastSubscriptionSync = Date()
             consumeDropClaudeCacheTrigger()
             await subscriptionEngine.syncAll()
+        }
+        if triggered || Date().timeIntervalSince(lastSync) >= Double(config.refreshMinutes) * 60 {
+            lastSync = Date()
+            await engine.syncAll()
         }
         watchdog(config: config)
         try? Data().write(to: paths.heartbeat)

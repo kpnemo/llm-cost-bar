@@ -6,6 +6,18 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.16] - 2026-07-22
+
+### Fixed
+- One click now means one reconnect: after a successful Reconnect the
+  Claude card heals immediately instead of keeping the Reconnect button on
+  screen until the background service confirmed (up to ~90 s) — which read
+  as failure and invited repeat clicks. The service still re-verifies on
+  its next poll and re-marks the card if the new credential is bad.
+- Manual syncs (Sync now / reconnect) poll subscriptions before the slower
+  vendor-spend sync, so subscription cards refresh in seconds instead of
+  waiting behind a minute-long spend sync.
+
 ## [1.3.15] - 2026-07-22
 
 ### Fixed
