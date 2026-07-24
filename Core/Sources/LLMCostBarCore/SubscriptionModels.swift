@@ -32,8 +32,32 @@ public struct SubscriptionWindow: Equatable, Sendable {
             if m == 10080 { return "Weekly" }
             if m % 60 == 0 { return "\(m / 60)-hour" }
             return "\(m)-minute"
-        default: return windowID
+        default:
+            // Model-scoped weekly limits from claude.ai's `limits` array land as
+            // seven_day_<model> (e.g. seven_day_fable → "7-day Fable").
+            if windowID.hasPrefix("seven_day_") {
+                let name = windowID.dropFirst("seven_day_".count)
+                    .replacingOccurrences(of: "_", with: " ").capitalized
+                return "7-day \(name)"
+            }
+            return windowID
         }
+    }
+}
+
+/// Extra-usage spend + prepaid credit balance (claude.ai web API only). Money
+/// in minor units (cents) — kept far away from the API-spend dollar tables.
+public struct SubscriptionCredit: Equatable, Sendable {
+    public var spentMinor: Int        // extra usage spent this month
+    public var limitMinor: Int        // monthly extra-usage cap (0 = none set)
+    public var currency: String
+    public var resetsAt: Date?
+    public var freeCreditsMinor: Int  // remaining free/promo credit balance
+    public init(spentMinor: Int, limitMinor: Int, currency: String,
+                resetsAt: Date? = nil, freeCreditsMinor: Int = 0) {
+        self.spentMinor = spentMinor; self.limitMinor = limitMinor
+        self.currency = currency; self.resetsAt = resetsAt
+        self.freeCreditsMinor = freeCreditsMinor
     }
 }
 
@@ -41,12 +65,14 @@ public struct SubscriptionSnapshot: Equatable, Sendable {
     public var source: String        // SubscriptionSource.*
     public var planType: String?     // vendor-reported: "max_5x", "pro", "plus", …
     public var observedAt: Date      // api: fetch time; jsonl: event timestamp
-    public var origin: String        // "api" | "jsonl"
+    public var origin: String        // "api" | "jsonl" | "web"
     public var windows: [SubscriptionWindow]
+    public var credit: SubscriptionCredit?   // claude.ai web path only
     public init(source: String, planType: String?, observedAt: Date, origin: String,
-                windows: [SubscriptionWindow]) {
+                windows: [SubscriptionWindow], credit: SubscriptionCredit? = nil) {
         self.source = source; self.planType = planType
         self.observedAt = observedAt; self.origin = origin; self.windows = windows
+        self.credit = credit
     }
 }
 
@@ -75,6 +101,16 @@ public extension SubscriptionWindowRow {
         SubscriptionWindow(windowID: windowID, usedPercent: usedPercent,
                            resetsAt: nil, windowMinutes: windowMinutes).label
     }
+}
+
+public struct SubscriptionCreditRow: Equatable, Sendable {
+    public var source: String
+    public var spentMinor: Int
+    public var limitMinor: Int
+    public var currency: String
+    public var resetsAt: String?     // ISO8601
+    public var freeCreditsMinor: Int
+    public var observedAt: String    // ISO8601
 }
 
 public struct SubscriptionPoint: Equatable, Hashable, Sendable {
