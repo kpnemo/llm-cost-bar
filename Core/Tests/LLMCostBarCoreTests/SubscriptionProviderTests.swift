@@ -57,7 +57,10 @@ final class ClaudeSubscriptionProviderTests: XCTestCase {
                           ResolvedClaudeToken(accessToken: "tok-abc", subscriptionType: "max_5x",
                                               source: .cache))))
     -> ClaudeSubscriptionProvider {
-        ClaudeSubscriptionProvider(http: http, credentials: source, detect: { true })
+        // webSession nil: these tests exercise the OAuth fallback path and must
+        // not read the real vault on the test machine.
+        ClaudeSubscriptionProvider(http: http, credentials: source, detect: { true },
+                                   webSession: { nil }, saveWebSession: { _ in })
     }
 
     func testParsesAllWindowsAndSendsLoadBearingHeaders() async throws {

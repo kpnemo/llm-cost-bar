@@ -19,6 +19,7 @@ struct SubscriptionsSection: View {
                              windows: SubscriptionCard.ordered(model.subscriptionWindows.filter { $0.source == src.source }),
                              series: model.subscriptionSeries[src.source] ?? [],
                              threshold: model.config.subscriptionAlertThreshold,
+                             credit: model.subscriptionCredits.first { $0.source == src.source },
                              connectPhase: isClaude ? claudeConnect.phase : nil,
                              onConnect: isClaude ? { claudeConnect.connect() } : nil)
         }
@@ -34,6 +35,7 @@ struct SubscriptionCard: View {
     let windows: [SubscriptionWindowRow]
     let series: [SubscriptionPoint]
     let threshold: Int
+    var credit: SubscriptionCreditRow? = nil
     var connectPhase: ClaudeConnectController.Phase? = nil
     var onConnect: (() -> Void)? = nil
 
@@ -81,7 +83,7 @@ struct SubscriptionCard: View {
             if windows.isEmpty {
                 Text("waiting for first sync…").font(.subheadline).foregroundStyle(.secondary)
             }
-            ForEach(windows, id: \.self) { w in
+            ForEach(visibleWindows, id: \.self) { w in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Text("\(w.label) — \(Int(w.usedPercent))%")
@@ -95,6 +97,13 @@ struct SubscriptionCard: View {
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(displayName) \(w.label) window, \(Int(w.usedPercent)) percent used, \(resetText(w))")
+            }
+
+            // Extra-usage spend + free credits (claude.ai cookie mode only) —
+            // mirrors ClaudeUsageBar's panel: shown once there is actual spend
+            // or a credit balance, with a Manage link out to claude.ai.
+            if let credit, credit.spentMinor > 0 || credit.freeCreditsMinor > 0 {
+                extraUsageBlock(credit)
             }
 
             // Sparkline appears once ≥12 h of history exists — with less, two
@@ -172,6 +181,53 @@ struct SubscriptionCard: View {
         return Date().timeIntervalSince(oldest) >= 12 * 3600
     }
 
+    // MARK: extra usage / credits
+
+    @ViewBuilder private func extraUsageBlock(_ c: SubscriptionCreditRow) -> some View {
+        let pct = c.limitMinor > 0 ? Double(c.spentMinor) / Double(c.limitMinor) : 0
+        let pctInt = Int((pct * 100).rounded())
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("Extra usage").font(.subheadline)
+                Spacer()
+                Button("Manage →") {
+                    NSWorkspace.shared.open(URL(string: "https://claude.ai/new#settings/usage")!)
+                }
+                .buttonStyle(.borderless).font(.caption.weight(.semibold))
+            }
+            if c.spentMinor > 0 {
+                if c.limitMinor > 0 {
+                    ProgressView(value: min(pct, 1.0))
+                        .tint(barColor(pct * 100))
+                        .controlSize(.small)
+                }
+                HStack {
+                    Text(c.limitMinor > 0
+                         ? "\(money(c.spentMinor, c.currency)) of \(money(c.limitMinor, c.currency)) · \(pctInt > 100 ? "over limit" : "\(pctInt)%")"
+                         : "\(money(c.spentMinor, c.currency)) spent")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if let reset = c.resetsAt.flatMap(parseISO) {
+                        Text("Resets \(reset.formatted(.dateTime.month(.abbreviated).day()))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if c.freeCreditsMinor > 0 {
+                Text("\(money(c.freeCreditsMinor, c.currency)) free credits left")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(displayName) extra usage, \(money(c.spentMinor, c.currency)) spent")
+    }
+
+    private func money(_ minor: Int, _ currency: String) -> String {
+        let v = Double(minor) / 100.0
+        return currency == "USD" ? String(format: "$%.2f", v)
+                                 : String(format: "%@ %.2f", currency, v)
+    }
+
     // MARK: presentation helpers
 
     /// Session-style windows first, weekly after, model-specific last.
@@ -179,6 +235,15 @@ struct SubscriptionCard: View {
         let rank = ["five_hour": 0, "secondary": 0, "seven_day": 1, "primary": 1,
                     "seven_day_opus": 2, "seven_day_sonnet": 3]
         return rows.sorted { (rank[$0.windowID] ?? 9) < (rank[$1.windowID] ?? 9) }
+    }
+
+    /// Model-scoped extras (windows outside the fixed set, e.g. 7-day Fable)
+    /// stay hidden until they see real use — idle bars are clutter
+    /// (same behavior as ClaudeUsageBar's Fable bar).
+    private var visibleWindows: [SubscriptionWindowRow] {
+        let fixed: Set = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet",
+                          "primary", "secondary"]
+        return windows.filter { fixed.contains($0.windowID) || $0.usedPercent >= 1 }
     }
 
     private var displayName: String { source.source == SubscriptionSource.claude ? "Claude" : "Codex" }

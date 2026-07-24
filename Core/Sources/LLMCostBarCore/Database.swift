@@ -101,6 +101,19 @@ public enum Database {
                 ON subscription_snapshots(source, window_id, observed_at DESC);
             """)
         }
+        m.registerMigration("v7-subscription-credit") { db in
+            try db.execute(sql: """
+            CREATE TABLE subscription_credit (
+                source TEXT PRIMARY KEY,
+                spent_minor INTEGER NOT NULL DEFAULT 0,
+                limit_minor INTEGER NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                resets_at TEXT,
+                free_credits_minor INTEGER NOT NULL DEFAULT 0,
+                observed_at TEXT NOT NULL
+            );
+            """)
+        }
         return m
     }
 }
