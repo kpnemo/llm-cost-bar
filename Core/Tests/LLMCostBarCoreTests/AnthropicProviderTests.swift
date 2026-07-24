@@ -24,7 +24,8 @@ final class AnthropicProviderTests: XCTestCase {
 
     func testCostReportNormalizesAndMergesPerModelPerDay() async throws {
         let http = FakeHTTP(); http.responses["cost_report"] = (costJSON, 200)
-        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: Date())
+        let records = (try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: Date()))
+            .filter { $0.model != AnthropicProvider.estimatedModel }
         // opus/18th merged, haiku/18th, opus/19th, haiku/19th (zero rows kept so
         // vendor corrections can overwrite stale data via the upsert)
         XCTAssertEqual(records.count, 4)
@@ -190,6 +191,117 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(a.todayUSD ?? -1, 20.0, accuracy: 0.01)
     }
 
+    // MARK: same-day estimation (cost_report lags ~24h; usage_report is live)
+
+    // Usage weight on 07-18 (1000) has matching cost ($10 → rate 0.01/weight);
+    // usage weight on 07-20 "today" (2000) has NO cost yet → estimate $20.
+    let lagUsageJSON = #"""
+    {"data":[
+      {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+        {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}
+      ]},
+      {"starting_at":"2026-07-20T00:00:00Z","ending_at":"2026-07-21T00:00:00Z","results":[
+        {"api_key_id":"apikey_NEW","model":"claude-opus-4-8","uncached_input_tokens":2000}
+      ]}
+    ],"has_more":false,"next_page":null}
+    """#
+    let lagCostJSON = #"""
+    {"data":[
+      {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+        {"currency":"USD","amount":"1000","model":"claude-opus-4-8","description":"opus"}
+      ]}
+    ],"has_more":false,"next_page":null}
+    """#
+
+    func testFetchUsageEstimatesRecentDaysMissingFromCostReport() async throws {
+        let http = FakeHTTP()
+        http.responses["cost_report"] = (lagCostJSON, 200)
+        http.responses["usage_report"] = (lagUsageJSON, 200)
+        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: julyTwentiethNoon)
+        let estimates = records.filter { $0.model == AnthropicProvider.estimatedModel }
+        // One row per day across the WHOLE window (31 days incl. today), so a
+        // stale estimate zeroes out even after long daemon downtime.
+        XCTAssertEqual(estimates.count, 31)
+        XCTAssertEqual(estimates.first { $0.day == "2026-07-20" }?.costUSD ?? -1, 20.0,
+                       accuracy: 0.001, "2000 weight × $0.01/weight implied rate")
+        // 07-18 has real cost → no estimate; 07-19/17 have no usage → zero.
+        XCTAssertEqual(estimates.first { $0.day == "2026-07-18" }?.costUSD, 0)
+        XCTAssertEqual(estimates.first { $0.day == "2026-07-19" }?.costUSD, 0)
+        XCTAssertTrue(estimates.allSatisfy { $0.day == "2026-07-20" || $0.costUSD == 0 })
+        // Real rows unchanged alongside.
+        XCTAssertEqual(records.first { $0.model == "claude-opus-4-8" }?.costUSD ?? 0, 10.0, accuracy: 0.001)
+    }
+
+    /// Old usage with no matching cost row is a real gap, not reporting lag —
+    /// it must get a zero sentinel, never a lasting positive estimate.
+    func testNoPositiveEstimateOutsideLagHorizon() async throws {
+        let oldUsage = #"""
+        {"data":[
+          {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}
+          ]},
+          {"starting_at":"2026-06-25T00:00:00Z","ending_at":"2026-06-26T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":9999}
+          ]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let http = FakeHTTP()
+        http.responses["cost_report"] = (lagCostJSON, 200)   // cost only on 07-18
+        http.responses["usage_report"] = (oldUsage, 200)
+        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: julyTwentiethNoon)
+        let june25 = records.first { $0.model == AnthropicProvider.estimatedModel && $0.day == "2026-06-25" }
+        XCTAssertEqual(june25?.costUSD, 0, "25-day-old usage-only day is a gap, not lag")
+    }
+
+    /// usage_report failure must not block real rows AND must still zero the
+    /// sentinel rows — otherwise an estimate stored by an earlier sync would
+    /// double-count once the real cost lands (Codex review finding).
+    func testUsageReportFailureEmitsZeroedSentinelsAndKeepsRealRows() async throws {
+        let http = FakeHTTP()
+        http.responses["cost_report"] = (costJSON, 200)   // no usage_report stub → throws
+        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: julyTwentiethNoon)
+        let estimates = records.filter { $0.model == AnthropicProvider.estimatedModel }
+        XCTAssertEqual(estimates.count, 31)
+        XCTAssertTrue(estimates.allSatisfy { $0.costUSD == 0 })
+        XCTAssertEqual(records.count - estimates.count, 4, "real rows flow untouched")
+    }
+
+    func testEstimationUsesOverallRateForModelWithNoCostHistory() async throws {
+        // Today's usage is on haiku (no haiku cost history) → overall rate from opus.
+        let usage = #"""
+        {"data":[
+          {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}
+          ]},
+          {"starting_at":"2026-07-20T00:00:00Z","ending_at":"2026-07-21T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-haiku-4-5","uncached_input_tokens":500}
+          ]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let http = FakeHTTP()
+        http.responses["cost_report"] = (lagCostJSON, 200)   // $10 over 1000 weight → 0.01
+        http.responses["usage_report"] = (usage, 200)
+        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: julyTwentiethNoon)
+        XCTAssertEqual(records.first { $0.model == AnthropicProvider.estimatedModel && $0.day == "2026-07-20" }?
+            .costUSD ?? -1, 5.0, accuracy: 0.001)
+    }
+
+    /// The estimated dollars must reach the per-key list too — a key created
+    /// today (the reported openworker case) appears with today's spend.
+    func testKeyTotalsAttributeEstimatedSpendToNewKey() async throws {
+        let http = FakeHTTP()
+        http.responses["usage_report"] = (lagUsageJSON, 200)
+        http.responses["cost_report"] = (lagCostJSON, 200)
+        http.responses["api_keys"] = (#"{"data":[{"id":"apikey_A","name":"prod"},{"id":"apikey_NEW","name":"openworker"}],"has_more":false,"last_id":"apikey_NEW"}"#, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: julyTwentiethNoon)
+        let newKey = totals.first { $0.apiKeyID == "openworker" }
+        XCTAssertEqual(newKey?.totalUSD ?? -1, 20.0, accuracy: 0.01)
+        XCTAssertEqual(newKey?.todayUSD ?? -1, 20.0, accuracy: 0.01)
+        let prod = totals.first { $0.apiKeyID == "prod" }
+        XCTAssertEqual(prod?.totalUSD ?? -1, 10.0, accuracy: 0.01)
+        XCTAssertEqual(prod?.todayUSD ?? -1, 0.0, accuracy: 0.01)
+    }
+
     /// cost_report paginates via has_more/next_page; all pages must be merged.
     func testFetchUsageMergesAcrossPages() async throws {
         let costJSONPage1 = #"""
@@ -209,7 +321,8 @@ final class AnthropicProviderTests: XCTestCase {
         // URL, which also contains the short page-1 key.
         http.responses["cost_report"] = (costJSONPage1, 200)          // 11 chars
         http.responses["&page=page-2"] = (costJSONPage2, 200)         // 12 chars, present only in page-2's URL → wins
-        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: Date())
+        let records = (try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: Date()))
+            .filter { $0.model != AnthropicProvider.estimatedModel }
         XCTAssertEqual(records.count, 1, "same model+day across pages must merge into one row")
         XCTAssertEqual(records[0].costUSD, 15.0, accuracy: 0.001, "1000+500 cents across two pages")
     }
