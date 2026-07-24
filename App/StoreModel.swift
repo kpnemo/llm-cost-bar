@@ -14,6 +14,7 @@ final class StoreModel: ObservableObject {
     @Published var series: [String: [DayCost]] = [:]
     @Published var subscriptionSources: [SubscriptionSourceRow] = []
     @Published var subscriptionWindows: [SubscriptionWindowRow] = []
+    @Published var subscriptionCredits: [SubscriptionCreditRow] = []
     @Published var subscriptionSeries: [String: [SubscriptionPoint]] = [:]
     private var notificationAuthRequested = false
 
@@ -79,6 +80,7 @@ final class StoreModel: ObservableObject {
 
         subscriptionSources = (try? store.subscriptionSources()) ?? subscriptionSources
         subscriptionWindows = (try? store.latestSubscriptionWindows()) ?? subscriptionWindows
+        subscriptionCredits = (try? store.subscriptionCredits()) ?? subscriptionCredits
         subscriptionSeries = Dictionary(uniqueKeysWithValues: subscriptionSources.map { src in
             // Sparkline tracks the weekly window: claude seven_day, codex primary.
             let weekly = src.source == SubscriptionSource.claude ? "seven_day" : "primary"

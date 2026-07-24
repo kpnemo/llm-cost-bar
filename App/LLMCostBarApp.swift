@@ -160,6 +160,7 @@ struct LLMCostBarApp: App {
     @StateObject private var pairing = PairingController()
     @StateObject private var updater = UpdaterModel()
     @StateObject private var claudeConnect = ClaudeConnectController()
+    @StateObject private var claudeCookie = ClaudeCookieController()
 
     var body: some Scene {
         MenuBarExtra {
@@ -168,6 +169,7 @@ struct LLMCostBarApp: App {
                 .environmentObject(pairing)
                 .environmentObject(updater)
                 .environmentObject(claudeConnect)
+                .environmentObject(claudeCookie)
         } label: {
             // Placeholder glyph until icon concepts are chosen (spec open item).
             HStack(spacing: 3) {
@@ -183,6 +185,7 @@ struct LLMCostBarApp: App {
                 .environmentObject(pairing)
                 .environmentObject(updater)
                 .environmentObject(claudeConnect)
+                .environmentObject(claudeCookie)
         }
     }
 
