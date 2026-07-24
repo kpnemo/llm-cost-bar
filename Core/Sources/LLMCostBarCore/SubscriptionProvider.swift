@@ -12,27 +12,77 @@ public protocol SubscriptionProvider: Sendable {
     func fetchSnapshot(now: Date) async throws -> SubscriptionSnapshot
 }
 
-/// Claude Pro/Max limits via Claude Code's OAuth token — the same endpoint and
-/// headers Claude Code's /usage uses. (Approach borrowed from steipete/CodexBar, MIT.)
+/// Claude Pro/Max limits, two strategies in strict preference order:
+///   1. claude.ai web API with the user's pasted browser cookie (months-lived,
+///      zero keychain prompts ever, richer data — extra usage + credits)
+///   2. Claude Code's OAuth token — the same endpoint and headers Claude
+///      Code's /usage uses. (Approach borrowed from steipete/CodexBar, MIT.)
 public struct ClaudeSubscriptionProvider: SubscriptionProvider {
     public let sourceID = SubscriptionSource.claude
     let http: any HTTPClient
     let base: URL
+    let webBase: URL
     /// Non-interactive by construction in the daemon (ClaudeTokenResolver):
     /// this provider can therefore never trigger a keychain prompt.
     let credentials: any ClaudeCredentialSource
     let detect: @Sendable () -> Bool
+    let webSession: @Sendable () -> ClaudeWebSession?
+    /// Persists the org id discovered via bootstrap so later polls skip it.
+    let saveWebSession: @Sendable (ClaudeWebSession) -> Void
 
     public init(http: any HTTPClient = URLSessionHTTPClient(),
                 base: URL = URL(string: "https://api.anthropic.com")!,
+                webBase: URL = URL(string: "https://claude.ai")!,
                 credentials: any ClaudeCredentialSource = ClaudeTokenResolver.live(),
-                detect: @escaping @Sendable () -> Bool = { ClaudeCodeCredentials.isDetected() }) {
-        self.http = http; self.base = base; self.credentials = credentials; self.detect = detect
+                detect: @escaping @Sendable () -> Bool = { ClaudeCodeCredentials.isDetected() },
+                webSession: @escaping @Sendable () -> ClaudeWebSession? = { Self.vaultWebSession() },
+                saveWebSession: @escaping @Sendable (ClaudeWebSession) -> Void = { Self.storeVaultWebSession($0) }) {
+        self.http = http; self.base = base; self.webBase = webBase
+        self.credentials = credentials; self.detect = detect
+        self.webSession = webSession; self.saveWebSession = saveWebSession
     }
 
-    public func isDetected() -> Bool { detect() }
+    /// Vault I/O never prompts — our own item, ACL'd to app + daemon.
+    public static func vaultWebSession(keychain: KeychainStore = KeychainStore()) -> ClaudeWebSession? {
+        ((try? keychain.getKey(accountID: ClaudeWebSession.vaultKey)) ?? nil)
+            .flatMap(ClaudeWebSession.decode)
+    }
+
+    public static func storeVaultWebSession(_ s: ClaudeWebSession,
+                                            keychain: KeychainStore = KeychainStore()) {
+        try? keychain.setKey(s.encodedJSON, accountID: ClaudeWebSession.vaultKey)
+    }
+
+    public func isDetected() -> Bool { webSession() != nil || detect() }
 
     public func fetchSnapshot(now: Date) async throws -> SubscriptionSnapshot {
+        if let session = webSession() {
+            return try await fetchWebSnapshot(session, now: now)
+        }
+        return try await fetchOAuthSnapshot(now: now)
+    }
+
+    // MARK: strategy 1 — claude.ai web API (cookie)
+
+    func fetchWebSnapshot(_ session: ClaudeWebSession, now: Date) async throws -> SubscriptionSnapshot {
+        let web = ClaudeWebClient(http: http, base: webBase)
+        var orgID = session.orgID ?? ClaudeWebSession.orgID(fromCookie: session.cookie)
+        if orgID == nil { orgID = try await web.fetchOrgID(cookie: session.cookie) }
+        guard let orgID else { throw ProviderError.decode("claude.ai: no org id") }
+        if session.orgID != orgID {
+            saveWebSession(ClaudeWebSession(cookie: session.cookie, orgID: orgID))
+        }
+        let windows = try await web.fetchUsageWindows(cookie: session.cookie, orgID: orgID)
+        // Money endpoints are additive — their failure must not take down the bars.
+        let credit = try? await web.fetchCredit(cookie: session.cookie, orgID: orgID)
+        return SubscriptionSnapshot(source: SubscriptionSource.claude, planType: nil,
+                                    observedAt: now, origin: "web", windows: windows,
+                                    credit: credit)
+    }
+
+    // MARK: strategy 2 — Claude Code OAuth token
+
+    func fetchOAuthSnapshot(now: Date) async throws -> SubscriptionSnapshot {
         let resolved: ResolvedClaudeToken
         switch credentials.resolve() {
         case .found(let t): resolved = t

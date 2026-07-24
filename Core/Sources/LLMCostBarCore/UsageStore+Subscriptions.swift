@@ -31,6 +31,17 @@ extension UsageStore {
             let cutoff = Self.iso.string(from: now.addingTimeInterval(-Self.retentionDays * 86400))
             try db.execute(sql: "DELETE FROM subscription_snapshots WHERE observed_at < ?",
                            arguments: [cutoff])
+            // Latest-value row; all-zero credit data still overwrites (spend
+            // resets monthly — keeping a stale nonzero row would lie in the UI).
+            if let c = snap.credit {
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO subscription_credit
+                    (source, spent_minor, limit_minor, currency, resets_at, free_credits_minor, observed_at)
+                    VALUES (?,?,?,?,?,?,?)
+                    """, arguments: [snap.source, c.spentMinor, c.limitMinor, c.currency,
+                                     c.resetsAt.map(Self.iso.string(from:)), c.freeCreditsMinor,
+                                     observedISO])
+            }
         }
     }
 
@@ -100,6 +111,21 @@ extension UsageStore {
                 .map { SubscriptionSourceRow(source: $0["source"], enabled: $0["enabled"],
                                              planType: $0["plan_type"], lastOK: $0["last_ok"],
                                              stale: $0["stale"], staleReason: $0["stale_reason"]) }
+        }
+    }
+
+    /// Latest extra-usage/credit row per source (claude.ai web path writes it).
+    public func subscriptionCredits() throws -> [SubscriptionCreditRow] {
+        try db.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT source, spent_minor, limit_minor, currency, resets_at, free_credits_minor, observed_at
+                FROM subscription_credit ORDER BY source
+                """)
+                .map { SubscriptionCreditRow(source: $0["source"], spentMinor: $0["spent_minor"],
+                                             limitMinor: $0["limit_minor"], currency: $0["currency"],
+                                             resetsAt: $0["resets_at"],
+                                             freeCreditsMinor: $0["free_credits_minor"],
+                                             observedAt: $0["observed_at"]) }
         }
     }
 

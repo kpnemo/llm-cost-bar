@@ -25,7 +25,37 @@ final class SubscriptionStoreTests: XCTestCase {
         try dbq.read { db in
             XCTAssertTrue(try db.tableExists("subscription_sources"))
             XCTAssertTrue(try db.tableExists("subscription_snapshots"))
+            XCTAssertTrue(try db.tableExists("subscription_credit"))
         }
+    }
+
+    func testCreditRowUpsertsAndZeroOverwrites() throws {
+        let store = try makeStore()
+        try store.registerSubscriptionSource(source: "claude")
+        var s = snap(observed: "2026-07-24T10:00:00Z", origin: "web",
+                     windows: [SubscriptionWindow(windowID: "five_hour", usedPercent: 10)])
+        s.credit = SubscriptionCredit(spentMinor: 1234, limitMinor: 5000, currency: "USD",
+                                      resetsAt: date("2026-08-01T00:00:00Z"), freeCreditsMinor: 500)
+        try store.upsertSubscriptionSnapshot(s, now: date("2026-07-24T10:00:00Z"))
+        var rows = try store.subscriptionCredits()
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].spentMinor, 1234)
+        XCTAssertEqual(rows[0].freeCreditsMinor, 500)
+        XCTAssertEqual(rows[0].resetsAt, "2026-08-01T00:00:00Z")
+
+        // Monthly reset: all-zero credit must overwrite the stale nonzero row.
+        s.credit = SubscriptionCredit(spentMinor: 0, limitMinor: 5000, currency: "USD")
+        s.observedAt = date("2026-08-01T10:00:00Z")
+        try store.upsertSubscriptionSnapshot(s, now: date("2026-08-01T10:00:00Z"))
+        rows = try store.subscriptionCredits()
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].spentMinor, 0)
+
+        // Snapshot without credit (OAuth fallback) leaves the row untouched.
+        s.credit = nil
+        s.observedAt = date("2026-08-01T11:00:00Z")
+        try store.upsertSubscriptionSnapshot(s, now: date("2026-08-01T11:00:00Z"))
+        XCTAssertEqual(try store.subscriptionCredits()[0].observedAt, "2026-08-01T10:00:00Z")
     }
 
     func testUpsertIsIdempotentOnObservedAt() throws {

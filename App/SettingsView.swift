@@ -27,6 +27,8 @@ struct AccountsTab: View {
     @EnvironmentObject var model: StoreModel
     @EnvironmentObject var pairing: PairingController
     @EnvironmentObject var claudeConnect: ClaudeConnectController
+    @EnvironmentObject var claudeCookie: ClaudeCookieController
+    @State private var showCookieSetup = false
     @State private var showAddFlow = false
     @State private var selectedProvider = "OpenRouter"
     @State private var newName = "personal"
@@ -120,11 +122,14 @@ struct AccountsTab: View {
                     }
                     .toggleStyle(.switch)
                     if src.source == SubscriptionSource.claude && src.enabled {
-                        claudeConnectRows(src)
+                        claudeCookieRows(src)
+                        if !claudeCookie.hasCookie { claudeConnectRows(src) }
                     }
                 }
                 if model.subscriptionSources.contains(where: { $0.source == SubscriptionSource.claude }) {
-                    Text("Claude limits reuse Claude Code's sign-in from your Keychain, read-only. Connecting asks for Keychain access once; after that the app never prompts on its own — if access is lost (Claude Code rotates its sign-in), a Reconnect button appears instead.")
+                    Text(claudeCookie.hasCookie
+                         ? "Claude limits come from claude.ai directly using your pasted browser cookie — stored only in your Keychain, read without any prompts. Browser sessions last months; if the cookie ever expires you'll see a note here to paste a fresh one."
+                         : "Without a cookie, Claude limits reuse Claude Code's sign-in from your Keychain — that token rotates often, so macOS re-asks for access and a Reconnect click is needed regularly. Pasting a claude.ai cookie above avoids all of that.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -170,6 +175,73 @@ struct AccountsTab: View {
         .onAppear {
             claudeConnect.store = model.store
             claudeConnect.onChanged = { model.refresh() }
+            claudeCookie.store = model.store
+            claudeCookie.onChanged = { model.refresh() }
+        }
+    }
+
+    /// claude.ai cookie mode (recommended): paste once, no Keychain prompts ever.
+    /// Same test-before-store rule as provider pairing.
+    @ViewBuilder private func claudeCookieRows(_ src: SubscriptionSourceRow) -> some View {
+        let cookieExpired = src.stale && src.staleReason == ClaudeWebSession.cookieExpiredReason
+        if claudeCookie.hasCookie && !showCookieSetup {
+            HStack {
+                if cookieExpired {
+                    Label("Cookie expired — paste a fresh one", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                } else {
+                    Label("Using claude.ai cookie — no Keychain prompts", systemImage: "checkmark.seal")
+                        .font(.caption).foregroundStyle(.green)
+                }
+                Spacer()
+                Button(cookieExpired ? "Update cookie…" : "Replace…") { showCookieSetup = true }
+                    .controlSize(.small)
+                Button("Remove") { claudeCookie.removeCookie(); model.refresh() }
+                    .controlSize(.small)
+            }
+        }
+        if !claudeCookie.hasCookie && !showCookieSetup {
+            HStack {
+                Text("Recommended: connect with a claude.ai cookie — one paste, months-lived, zero Keychain prompts.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Set up…") { showCookieSetup = true }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+        }
+        if showCookieSetup {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("""
+                **Step 1.** Open your claude.ai usage page (button below) and open \
+                DevTools with ⌥⌘I → **Network** tab.
+                **Step 2.** Refresh the page, click the **usage** request, and in \
+                Request Headers copy the full **Cookie** value.
+                """)
+                .font(.callout)
+                Button("Open claude.ai usage page ↗") {
+                    NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)
+                }
+                Text("**Step 3.** Come back here and click:").font(.callout)
+                HStack {
+                    Button("Paste cookie from clipboard & Test") { claudeCookie.pasteAndTest() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(claudeCookie.phase == .testing)
+                    if claudeCookie.phase == .testing { ProgressView().controlSize(.small) }
+                }
+                switch claudeCookie.phase {
+                case .done:
+                    Label("Cookie verified & saved ✓ — limits update from claude.ai now",
+                          systemImage: "checkmark.circle")
+                        .font(.caption).foregroundStyle(.green)
+                case .failed(let msg):
+                    Label(msg, systemImage: "xmark.circle")
+                        .font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                default: EmptyView()
+                }
+                Button("Close") { showCookieSetup = false }.buttonStyle(.link)
+            }
+            .padding(.vertical, 4)
         }
     }
 
