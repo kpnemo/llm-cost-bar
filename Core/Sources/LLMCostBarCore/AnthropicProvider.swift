@@ -145,37 +145,7 @@ public struct AnthropicProvider: VendorProvider {
         let endDay = Day.utcToday(now: now.addingTimeInterval(86400))
 
         // 1) weighted tokens per (day, normalized model, api_key_id)
-        var weights: [String: [String: [String: Double]]] = [:]   // day → model → key → weight
-        var page: String? = nil
-        var hops = 0
-        repeat {
-            var comps = URLComponents(url: baseURL.appendingPathComponent("v1/organizations/usage_report/messages"),
-                                      resolvingAgainstBaseURL: false)!
-            var items = [
-                URLQueryItem(name: "starting_at", value: "\(startDay)T00:00:00Z"),
-                URLQueryItem(name: "ending_at", value: "\(endDay)T00:00:00Z"),
-                URLQueryItem(name: "bucket_width", value: "1d"),
-                URLQueryItem(name: "group_by[]", value: "api_key_id"),
-                URLQueryItem(name: "group_by[]", value: "model"),
-                URLQueryItem(name: "limit", value: "31"),
-            ]
-            if let page { items.append(URLQueryItem(name: "page", value: page)) }
-            comps.queryItems = items
-            let resp = try await getJSON(comps.url!, as: UsageResp.self)
-            for bucket in resp.data {
-                let day = String(bucket.starting_at.prefix(10))
-                for row in bucket.results ?? [] {
-                    let w = weight(row)
-                    guard w > 0 else { continue }
-                    let model = Self.normalizeModel(row.model ?? "other")
-                    // Workbench traffic has no api_key_id.
-                    weights[day, default: [:]][model, default: [:]][row.api_key_id ?? "workbench", default: 0] += w
-                }
-            }
-            page = (resp.has_more == true) ? resp.next_page : nil
-            hops += 1
-        } while page != nil && hops < 10
-
+        let weights = try await fetchWeights(startDay: startDay, endDay: endDay)
         // 2) real dollars per (day, normalized model)
         var costByDayModel: [String: [String: Double]] = [:]
         for r in try await fetchUsage(sinceDaysAgo: days, now: now) {
@@ -219,6 +189,44 @@ public struct AnthropicProvider: VendorProvider {
         // 4) window sums + id → name mapping (merge same-named keys)
         let names = (try? await fetchKeyNames()) ?? [:]
         return KeyTotal.aggregate(perKeyDay: perKeyDay, names: names, now: now)
+    }
+
+    /// Weighted tokens per (day, normalized model, api_key_id) from the
+    /// near-real-time usage report. Shared by per-key attribution and the
+    /// same-day cost estimation.
+    private func fetchWeights(startDay: String, endDay: String) async throws
+    -> [String: [String: [String: Double]]] {
+        var weights: [String: [String: [String: Double]]] = [:]   // day → model → key → weight
+        var page: String? = nil
+        var hops = 0
+        repeat {
+            var comps = URLComponents(url: baseURL.appendingPathComponent("v1/organizations/usage_report/messages"),
+                                      resolvingAgainstBaseURL: false)!
+            var items = [
+                URLQueryItem(name: "starting_at", value: "\(startDay)T00:00:00Z"),
+                URLQueryItem(name: "ending_at", value: "\(endDay)T00:00:00Z"),
+                URLQueryItem(name: "bucket_width", value: "1d"),
+                URLQueryItem(name: "group_by[]", value: "api_key_id"),
+                URLQueryItem(name: "group_by[]", value: "model"),
+                URLQueryItem(name: "limit", value: "31"),
+            ]
+            if let page { items.append(URLQueryItem(name: "page", value: page)) }
+            comps.queryItems = items
+            let resp = try await getJSON(comps.url!, as: UsageResp.self)
+            for bucket in resp.data {
+                let day = String(bucket.starting_at.prefix(10))
+                for row in bucket.results ?? [] {
+                    let w = weight(row)
+                    guard w > 0 else { continue }
+                    let model = Self.normalizeModel(row.model ?? "other")
+                    // Workbench traffic has no api_key_id.
+                    weights[day, default: [:]][model, default: [:]][row.api_key_id ?? "workbench", default: 0] += w
+                }
+            }
+            page = (resp.has_more == true) ? resp.next_page : nil
+            hops += 1
+        } while page != nil && hops < 10
+        return weights
     }
 
     private func fetchKeyNames() async throws -> [String: String] {
@@ -280,6 +288,88 @@ public struct AnthropicProvider: VendorProvider {
             if var existing = merged[key] { existing.costUSD += r.costUSD; merged[key] = existing }
             else { merged[key] = r }
         }
-        return Array(merged.values)
+        let real = Array(merged.values)
+        return real + (await estimatedRecords(realCost: real, sinceDaysAgo: sinceDaysAgo, now: now))
+    }
+
+    // MARK: same-day cost estimation
+
+    /// Sentinel model for estimated spend rows; the leading "~" both marks it
+    /// visually in any model breakdown and can never collide with a real
+    /// model id from cost_report.
+    public static let estimatedModel = "~estimated"
+
+    /// cost_report lags real spend by up to ~24 h while usage_report is
+    /// near-real-time — without this, today's spend (and any key created
+    /// today) is invisible until tomorrow. For recent days where a model has
+    /// usage weight but NO cost row yet, estimate dollars as weight × the
+    /// window's implied $/weight rate for that model (overall blended rate
+    /// for models with no cost history). Estimates ride the normal pipeline:
+    /// one "~estimated" row per day across the whole window, re-emitted
+    /// (possibly as 0) on every sync so the upsert overwrites each one in
+    /// place as real cost data lands — an estimate never outlives the lag it
+    /// papers over, even across daemon downtime or usage_report outages.
+    /// Real cost rows are never touched by any failure in here.
+    /// Known conservative limits (accepted in Codex review 2026-07-24):
+    /// a partial-day cost row suppresses that (day, model) estimate, briefly
+    /// under-counting; refund-heavy days skew the implied rate; an org with
+    /// no cost history at all estimates $0.
+    private func estimatedRecords(realCost records: [UsageRecord],
+                                  sinceDaysAgo: Int, now: Date) async -> [UsageRecord] {
+        let startDay = Day.utcToday(now: now.addingTimeInterval(-Double(sinceDaysAgo) * 86400))
+        let endDay = Day.utcToday(now: now.addingTimeInterval(86400))
+        // On usage_report failure fall back to EMPTY weights, not to skipping:
+        // the sentinel rows must still be emitted (as zeros) so an estimate
+        // stored by an earlier sync can never linger beside newly-landed real
+        // cost and double-count (Codex review 2026-07-24, finding 1).
+        let weights = (try? await fetchWeights(startDay: startDay, endDay: endDay)) ?? [:]
+
+        var costByDayModel: [String: [String: Double]] = [:]
+        for r in records {
+            costByDayModel[r.day, default: [:]][Self.normalizeModel(r.model), default: 0] += r.costUSD
+        }
+
+        // Implied $/weight per model over (day, model) pairs where BOTH real
+        // cost and usage weight exist; only ratios, no absolute price table.
+        var costSum: [String: Double] = [:], weightSum: [String: Double] = [:]
+        var allCost = 0.0, allWeight = 0.0
+        for (day, models) in weights {
+            for (model, keyWeights) in models {
+                let w = keyWeights.values.reduce(0, +)
+                guard w > 0, let c = costByDayModel[day]?[model], c > 0 else { continue }
+                costSum[model, default: 0] += c
+                weightSum[model, default: 0] += w
+                allCost += c
+                allWeight += w
+            }
+        }
+        let overallRate = allWeight > 0 ? allCost / allWeight : 0
+
+        // Sentinel rows are re-emitted across the WHOLE fetched window so an
+        // estimate written before daemon downtime still gets zeroed on the
+        // first sync back — but NONZERO estimation is confined to the actual
+        // reporting-lag horizon. An old (day, model) with usage weight and no
+        // cost row is a real gap (model-name mismatch, uncharged usage), not
+        // lag, and must never earn a lasting positive estimate.
+        // (Codex review 2026-07-24, findings 1+2 and follow-up.)
+        let lagHorizonDays = 2
+        var out: [UsageRecord] = []
+        for back in 0...max(0, sinceDaysAgo) {
+            let day = Day.utcToday(now: now.addingTimeInterval(-Double(back) * 86400))
+            guard day >= startDay else { continue }
+            var estimate = 0.0
+            if back <= lagHorizonDays {
+                for (model, keyWeights) in weights[day] ?? [:] {
+                    // Any real cost row for (day, model) — even partial — wins.
+                    guard costByDayModel[day]?[model] == nil else { continue }
+                    let rate = weightSum[model].map { (costSum[model] ?? 0) / $0 } ?? overallRate
+                    estimate += keyWeights.values.reduce(0, +) * rate
+                }
+            }
+            out.append(UsageRecord(vendor: vendorID, accountID: accountID, apiKeyID: "org",
+                                   model: Self.estimatedModel, day: day,
+                                   requests: 0, tokensIn: 0, tokensOut: 0, costUSD: estimate))
+        }
+        return out
     }
 }
