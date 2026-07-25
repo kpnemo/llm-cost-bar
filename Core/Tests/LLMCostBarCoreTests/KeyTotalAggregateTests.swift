@@ -93,4 +93,60 @@ final class KeyTotalAggregateTests: XCTestCase {
         XCTAssertEqual(totals[0].mtdUSD ?? -1, 12.0, accuracy: 0.001, "day-01 spend must still count toward MTD")
         XCTAssertEqual(totals[0].todayUSD ?? -1, 3.0, accuracy: 0.001)
     }
+
+    // MARK: mergedByName semantics (spec 2026-07-25, merge table)
+
+    func testMergePreservesNilWindowsAndSumsNonNil() {
+        let merged = KeyTotal.mergedByName([
+            KeyTotal(apiKeyID: "k", totalUSD: 1, todayUSD: nil, mtdUSD: nil),
+            KeyTotal(apiKeyID: "k", totalUSD: 2, todayUSD: nil, mtdUSD: nil),
+        ])
+        XCTAssertNil(merged[0].todayUSD, "all-nil windows must stay nil, not become 0")
+        XCTAssertNil(merged[0].mtdUSD)
+        let mixed = KeyTotal.mergedByName([
+            KeyTotal(apiKeyID: "k", totalUSD: 1, todayUSD: 2.0, mtdUSD: nil),
+            KeyTotal(apiKeyID: "k", totalUSD: 2, todayUSD: nil, mtdUSD: 3.0),
+        ])
+        XCTAssertEqual(mixed[0].todayUSD ?? -1, 2.0, accuracy: 0.001)
+        XCTAssertEqual(mixed[0].mtdUSD ?? -1, 3.0, accuracy: 0.001)
+    }
+
+    func testMergeLifetimeIsAllOrNothing() {
+        let partial = KeyTotal.mergedByName([
+            KeyTotal(apiKeyID: "k", totalUSD: 1, lifetimeUSD: 5.0),
+            KeyTotal(apiKeyID: "k", totalUSD: 2, lifetimeUSD: nil),
+        ])
+        XCTAssertNil(partial[0].lifetimeUSD, "partial lifetime must not render as exact")
+        let full = KeyTotal.mergedByName([
+            KeyTotal(apiKeyID: "k", totalUSD: 1, lifetimeUSD: 5.0),
+            KeyTotal(apiKeyID: "k", totalUSD: 2, lifetimeUSD: 7.0),
+        ])
+        XCTAssertEqual(full[0].lifetimeUSD ?? -1, 12.0, accuracy: 0.001)
+    }
+
+    func testMergeCouplesRemainingAndResetToLimit() {
+        // Any unlimited sibling → whole group unlimited: remaining and reset must clear.
+        let anyUnlimited = KeyTotal.mergedByName([
+            KeyTotal(apiKeyID: "k", totalUSD: 1, limitUSD: 20, limitRemainingUSD: 5, limitReset: "weekly"),
+            KeyTotal(apiKeyID: "k", totalUSD: 2),
+        ])
+        XCTAssertNil(anyUnlimited[0].limitUSD)
+        XCTAssertNil(anyUnlimited[0].limitRemainingUSD, "no-limit row must never carry remaining")
+        XCTAssertNil(anyUnlimited[0].limitReset)
+        // Unknown remaining on one sibling → remaining nil (never coerced to 0), limit still sums.
+        let unknownRemaining = KeyTotal.mergedByName([
+            KeyTotal(apiKeyID: "k", totalUSD: 1, limitUSD: 20, limitRemainingUSD: nil, limitReset: "weekly"),
+            KeyTotal(apiKeyID: "k", totalUSD: 2, limitUSD: 10, limitRemainingUSD: 4, limitReset: "weekly"),
+        ])
+        XCTAssertEqual(unknownRemaining[0].limitUSD ?? -1, 30.0, accuracy: 0.001)
+        XCTAssertNil(unknownRemaining[0].limitRemainingUSD)
+        XCTAssertEqual(unknownRemaining[0].limitReset, "weekly")
+        // Differing reset intervals → reset nil.
+        let mixedReset = KeyTotal.mergedByName([
+            KeyTotal(apiKeyID: "k", totalUSD: 1, limitUSD: 20, limitRemainingUSD: 5, limitReset: "weekly"),
+            KeyTotal(apiKeyID: "k", totalUSD: 2, limitUSD: 10, limitRemainingUSD: 4, limitReset: "daily"),
+        ])
+        XCTAssertEqual(mixedReset[0].limitRemainingUSD ?? -1, 9.0, accuracy: 0.001)
+        XCTAssertNil(mixedReset[0].limitReset)
+    }
 }

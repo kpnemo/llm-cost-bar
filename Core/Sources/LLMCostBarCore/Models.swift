@@ -32,13 +32,15 @@ public struct KeyTotal: Equatable, Sendable {
     public var limitRemainingUSD: Double?
     public var limitReset: String?   // "daily" / "weekly" / "monthly"
     public var disabled: Bool
+    public var lifetimeUSD: Double?  // /keys `usage`; nil when vendor doesn't report it
     public init(apiKeyID: String, totalUSD: Double, todayUSD: Double? = nil, mtdUSD: Double? = nil,
                 limitUSD: Double? = nil, limitRemainingUSD: Double? = nil, limitReset: String? = nil,
-                disabled: Bool = false) {
+                disabled: Bool = false, lifetimeUSD: Double? = nil) {
         self.apiKeyID = apiKeyID; self.totalUSD = totalUSD
         self.todayUSD = todayUSD; self.mtdUSD = mtdUSD
         self.limitUSD = limitUSD; self.limitRemainingUSD = limitRemainingUSD
         self.limitReset = limitReset; self.disabled = disabled
+        self.lifetimeUSD = lifetimeUSD
     }
 }
 
@@ -74,22 +76,41 @@ extension KeyTotal {
                                                       todayUSD: $0.value.today, mtdUSD: $0.value.mtd) })
     }
 
-    /// Merge rows that share a display name into one, summing the money
-    /// windows. Budget fields only survive a merge when every merged key has
-    /// them (one unlimited key makes the combined budget unlimited → nil);
-    /// the merged row is disabled only if every underlying key is.
+    /// Merge rows that share a display name into one (account-local; rows from
+    /// different accounts never meet here). Nil means "unknown", and unknown
+    /// must never masquerade as a number:
+    /// - today/mtd: sum of non-nil, nil only if all nil (0 would fake windows
+    ///   onto legacy rows and flip the UI's hasWindows gate)
+    /// - lifetime: sum only when every row has it (a partial sum would render
+    ///   as an exact total)
+    /// - limit: sum only when every row has one; any unlimited sibling makes
+    ///   the group unlimited, which also clears remaining + reset
+    /// - remaining: within a limited group, sum only when every row has it
+    /// - reset: kept only when identical across the group
+    /// - disabled: true only when every row is disabled
     static func mergedByName(_ rows: [KeyTotal]) -> [KeyTotal] {
+        func sumKeepingNil(_ a: Double?, _ b: Double?) -> Double? {
+            if a == nil && b == nil { return nil }
+            return (a ?? 0) + (b ?? 0)
+        }
+        func sumIfBoth(_ a: Double?, _ b: Double?) -> Double? {
+            guard let a, let b else { return nil }
+            return a + b
+        }
         var byName: [String: KeyTotal] = [:]
         for row in rows {
             guard var agg = byName[row.apiKeyID] else { byName[row.apiKeyID] = row; continue }
             agg.totalUSD += row.totalUSD
-            agg.todayUSD = (agg.todayUSD ?? 0) + (row.todayUSD ?? 0)
-            agg.mtdUSD = (agg.mtdUSD ?? 0) + (row.mtdUSD ?? 0)
-            if let a = agg.limitUSD, let b = row.limitUSD {
-                agg.limitUSD = a + b
-                agg.limitRemainingUSD = (agg.limitRemainingUSD ?? 0) + (row.limitRemainingUSD ?? 0)
+            agg.todayUSD = sumKeepingNil(agg.todayUSD, row.todayUSD)
+            agg.mtdUSD = sumKeepingNil(agg.mtdUSD, row.mtdUSD)
+            agg.lifetimeUSD = sumIfBoth(agg.lifetimeUSD, row.lifetimeUSD)
+            agg.limitUSD = sumIfBoth(agg.limitUSD, row.limitUSD)
+            if agg.limitUSD == nil {
+                agg.limitRemainingUSD = nil
+                agg.limitReset = nil
             } else {
-                agg.limitUSD = nil; agg.limitRemainingUSD = nil; agg.limitReset = nil
+                agg.limitRemainingUSD = sumIfBoth(agg.limitRemainingUSD, row.limitRemainingUSD)
+                agg.limitReset = agg.limitReset == row.limitReset ? agg.limitReset : nil
             }
             agg.disabled = agg.disabled && row.disabled
             byName[row.apiKeyID] = agg
