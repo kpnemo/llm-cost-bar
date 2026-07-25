@@ -264,6 +264,63 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(or[0].totalUSD, 7)
     }
 
+    /// Renaming a key on the vendor dashboard must relabel the row, not
+    /// duplicate it: upsertKeyTotals rewrites the vendor's rows wholesale, so
+    /// the old display name disappears on the next sync.
+    func testRenamedKeyReplacesOldRowWithoutDuplicate() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q)
+        let store = UsageStore(db: q)
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
+            KeyTotal(apiKeyID: "mbp mike opencoude", totalUSD: 18.58, todayUSD: 0, mtdUSD: 18.58),
+        ])
+        // Same key (same hash upstream), renamed to "erik" before the next sync.
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
+            KeyTotal(apiKeyID: "erik", totalUSD: 18.58, todayUSD: 20.05, mtdUSD: 38.63),
+        ])
+        let keys = try store.vendorSummaries(today: "2026-07-25", monthPrefix: "2026-07",
+                                             last30Start: "2026-06-26")[0].topKeys
+        XCTAssertEqual(keys.map(\.apiKeyID), ["erik"], "old name must not linger after a rename")
+        XCTAssertEqual(keys[0].todayUSD ?? -1, 20.05, accuracy: 0.001)
+    }
+
+    func testKeyLimitFieldsRoundTrip() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q)
+        let store = UsageStore(db: q)
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
+            KeyTotal(apiKeyID: "capped", totalUSD: 5, todayUSD: 1, mtdUSD: 2,
+                     limitUSD: 20, limitRemainingUSD: 0.45, limitReset: "monthly", disabled: true),
+            KeyTotal(apiKeyID: "unlimited", totalUSD: 3, todayUSD: 0, mtdUSD: 1),
+        ])
+        let keys = try store.vendorSummaries(today: "2026-07-25", monthPrefix: "2026-07",
+                                             last30Start: "2026-06-26")[0].topKeys
+        let capped = keys.first { $0.apiKeyID == "capped" }!
+        XCTAssertEqual(capped.limitUSD ?? -1, 20, accuracy: 0.001)
+        XCTAssertEqual(capped.limitRemainingUSD ?? -1, 0.45, accuracy: 0.001)
+        XCTAssertEqual(capped.limitReset, "monthly")
+        XCTAssertTrue(capped.disabled)
+        let unlimited = keys.first { $0.apiKeyID == "unlimited" }!
+        XCTAssertNil(unlimited.limitUSD)
+        XCTAssertNil(unlimited.limitRemainingUSD)
+        XCTAssertFalse(unlimited.disabled)
+    }
+
+    /// A key created today has 30d total 0 (activity covers completed days
+    /// only) but live today/MTD > 0 — it must still appear in the key list.
+    func testKeyWithZeroTotalButLiveTodayIsVisible() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q)
+        let store = UsageStore(db: q)
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
+            KeyTotal(apiKeyID: "fresh", totalUSD: 0, todayUSD: 1.25, mtdUSD: 1.25),
+            KeyTotal(apiKeyID: "idle", totalUSD: 0, todayUSD: 0, mtdUSD: 0),
+        ])
+        let keys = try store.vendorSummaries(today: "2026-07-25", monthPrefix: "2026-07",
+                                             last30Start: "2026-06-26")[0].topKeys
+        XCTAssertEqual(keys.map(\.apiKeyID), ["fresh"], "live-only key shows; all-zero key stays hidden")
+    }
+
     /// last30USD must be live-corrected the same way today/MTD are: a window sum
     /// over [last30Start, today) that EXCLUDES today's rows, plus the same `t`
     /// (max(activityToday, liveDelta)) added back in — so today's spend is never

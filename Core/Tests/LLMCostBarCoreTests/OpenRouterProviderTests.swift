@@ -65,6 +65,30 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(r.tokensOut, 500)
     }
 
+    // Regression: /activity groups rows per ENDPOINT, so the same model can
+    // appear in multiple rows on one day (different providers). The store
+    // upserts on (model, day), so un-summed rows overwrite each other and
+    // silently drop spend (observed live: $2.88 vanished from July's totals).
+    func testFetchUsageSumsSameDayModelRowsAcrossEndpoints() async throws {
+        let http = FakeHTTP()
+        http.responses["/activity"] = (#"""
+        {"data":[
+          {"date":"2026-07-18 00:00:00","model":"anthropic/claude-sonnet-4","usage":1.00,"requests":2,"prompt_tokens":100,"completion_tokens":50},
+          {"date":"2026-07-18 00:00:00","model":"anthropic/claude-sonnet-4","usage":2.88,"requests":3,"prompt_tokens":200,"completion_tokens":80},
+          {"date":"2026-07-18 00:00:00","model":"openai/gpt-5","usage":0.50,"requests":1,"prompt_tokens":10,"completion_tokens":5}
+        ]}
+        """#, 200)
+        http.responses["/key"] = (keyJSON, 200)
+        let fixedNow = ISO8601DateFormatter().date(from: "2026-07-19T12:00:00Z")!
+        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 35, now: fixedNow)
+        XCTAssertEqual(records.count, 2, "same (day, model) rows must merge")
+        let sonnet = records.first { $0.model == "anthropic/claude-sonnet-4" }!
+        XCTAssertEqual(sonnet.costUSD, 3.88, accuracy: 0.001)
+        XCTAssertEqual(sonnet.requests, 5)
+        XCTAssertEqual(sonnet.tokensIn, 300)
+        XCTAssertEqual(sonnet.tokensOut, 130)
+    }
+
     func testAuthErrorSurfacesAsAuth() async throws {
         let http = FakeHTTP(); http.responses["/credits"] = (#"{"error":"bad key"}"#, 401)
         do {
@@ -176,6 +200,57 @@ final class OpenRouterProviderTests: XCTestCase {
         http.responses["api_key_hash=hashIDL002"] = (idleActivityJSON, 200)
         let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
         XCTAssertEqual(totals.map(\.apiKeyID), ["active"], "all-zero-usage key drops out entirely")
+    }
+
+    // /activity only covers COMPLETED UTC days — same-day spend is invisible
+    // there. The key's live usage_daily/usage_monthly counters must win so the
+    // per-key rows agree with the vendor header instead of showing $0.00 all day.
+    func testKeyTotalsPreferLiveDailyMonthlyCounters() async throws {
+        let http = FakeHTTP()
+        let keysJSON = #"""
+        {"data":[
+          {"name":"erik","label":"sk-or-v1-cd3","hash":"hashERK001","usage":84.04,
+           "usage_daily":20.05,"usage_monthly":38.63,
+           "limit":20.0,"limit_remaining":0.45,"limit_reset":"monthly","disabled":false}
+        ]}
+        """#
+        // Activity has yesterday only — today's 20.05 hasn't been published yet.
+        let activityJSON = #"""
+        {"data":[
+          {"date":"2026-06-30 00:00:00","model":"openai/gpt-4.1","usage":3.0,"requests":2,"prompt_tokens":10,"completion_tokens":5}
+        ]}
+        """#
+        http.responses["keys"] = (keysJSON, 200)
+        http.responses["api_key_hash=hashERK001"] = (activityJSON, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+        XCTAssertEqual(totals.count, 1)
+        let erik = totals[0]
+        XCTAssertEqual(erik.apiKeyID, "erik")
+        XCTAssertEqual(erik.todayUSD ?? -1, 20.05, accuracy: 0.001, "live counter, not lagging activity (0)")
+        XCTAssertEqual(erik.mtdUSD ?? -1, 38.63, accuracy: 0.001)
+        XCTAssertEqual(erik.totalUSD, 3.0, accuracy: 0.001, "30d column still from activity window")
+        XCTAssertEqual(erik.limitUSD ?? -1, 20.0, accuracy: 0.001)
+        XCTAssertEqual(erik.limitRemainingUSD ?? -1, 0.45, accuracy: 0.001)
+        XCTAssertEqual(erik.limitReset, "monthly")
+        XCTAssertFalse(erik.disabled)
+    }
+
+    // A key created and used today has no /activity rows at all (completed
+    // days only) — the live counters alone must keep it visible.
+    func testBrandNewKeyWithOnlyLiveUsageSurvives() async throws {
+        let http = FakeHTTP()
+        let keysJSON = #"""
+        {"data":[
+          {"name":"fresh","label":"sk-new","hash":"hashNEW001","usage":1.25,
+           "usage_daily":1.25,"usage_monthly":1.25,"disabled":false}
+        ]}
+        """#
+        http.responses["keys"] = (keysJSON, 200)
+        http.responses["api_key_hash=hashNEW001"] = (#"{"data":[]}"#, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+        XCTAssertEqual(totals.map(\.apiKeyID), ["fresh"])
+        XCTAssertEqual(totals[0].totalUSD, 0, accuracy: 0.001)
+        XCTAssertEqual(totals[0].todayUSD ?? -1, 1.25, accuracy: 0.001)
     }
 
     func testTwoKeysSameDisplayNameMergeIntoOneSummedRow() async throws {

@@ -300,7 +300,7 @@ struct VendorCard: View {
                 Chart(filled, id: \.day) { point in
                     BarMark(x: .value("Day", String(point.day.suffix(5))),
                             y: .value("USD", point.costUSD))
-                        .foregroundStyle(.blue.opacity(hoverDay == nil || hoverDay == point.day ? 0.7 : 0.3))
+                        .foregroundStyle(.blue.opacity(barOpacity(point.day)))
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis {
@@ -370,30 +370,50 @@ struct VendorCard: View {
             }
             let hasWindows = vendor.topKeys.contains { $0.mtdUSD != nil }
             ForEach(vendor.topKeys, id: \.self) { k in
-                HStack {
-                    Text(k.apiKeyID).font(.subheadline).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.tail)
-                    Spacer(minLength: 8)
-                    if hasWindows {
-                        keyCell(k.todayUSD, color: .blue)
-                        keyCell(k.mtdUSD, color: .primary)
-                        keyCell(k.totalUSD, color: .secondary)
-                    } else {
-                        Text(usd(k.totalUSD)).font(.subheadline).foregroundStyle(.secondary)
-                            .monospacedDigit()
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(k.apiKeyID).font(.subheadline).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.tail)
+                        if k.disabled {
+                            Text("disabled").font(.caption2).foregroundStyle(.red)
+                        }
+                        Spacer(minLength: 8)
+                        if hasWindows {
+                            keyCell(k.todayUSD, color: .blue)
+                            keyCell(k.mtdUSD, color: .primary)
+                            keyCell(k.totalUSD, color: .secondary)
+                        } else {
+                            Text(usd(k.totalUSD)).font(.subheadline).foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    if let limit = k.limitUSD, limit > 0 {
+                        let remaining = min(max(k.limitRemainingUSD ?? limit, 0), limit)
+                        let fraction = 1 - remaining / limit
+                        HStack(spacing: 6) {
+                            ProgressView(value: fraction)
+                                .tint(fraction < 0.7 ? .green : (fraction < 0.9 ? .orange : .red))
+                                .controlSize(.mini)
+                                .frame(maxWidth: 120)
+                            Text("\(usd(remaining)) left of \(usd(limit))"
+                                 + (k.limitReset.map { " · resets \($0)" } ?? ""))
+                                .font(.caption2).foregroundStyle(.tertiary)
+                            Spacer(minLength: 0)
+                        }
                     }
                 }
                 // VoiceOver: bare amounts carry no column semantics — read the
                 // whole row as one element with named columns.
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(hasWindows
-                    ? "\(k.apiKeyID), today \(axAmount(k.todayUSD)), month to date \(axAmount(k.mtdUSD)), 30 days \(axAmount(k.totalUSD))"
-                    : "\(k.apiKeyID), total \(usd(k.totalUSD))")
+                .accessibilityLabel(keyRowAXLabel(k, hasWindows: hasWindows))
             }
         }
     }
 
-    /// Fill missing days with zero bars so the 30-day chart has a continuous axis.
+    /// Fill missing days with zero bars so the 30-day chart has a continuous
+    /// axis. Today's bar uses the vendor's live figure when it exceeds the
+    /// activity feed (which only publishes completed UTC days) — otherwise the
+    /// chart shows an empty slot while the header reports live spend.
     private var filledSeries: [DayCost] {
         let byDay = Dictionary(uniqueKeysWithValues: series.map { ($0.day, $0.costUSD) })
         let fmt = DateFormatter()
@@ -402,8 +422,36 @@ struct VendorCard: View {
         fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")
         return (0..<30).reversed().map { offset in
             let day = fmt.string(from: Date().addingTimeInterval(-Double(offset) * 86400))
-            return DayCost(day: day, costUSD: byDay[day] ?? 0)
+            let cost = offset == 0 ? max(byDay[day] ?? 0, vendor.todayUSD) : (byDay[day] ?? 0)
+            return DayCost(day: day, costUSD: cost)
         }
+    }
+
+    /// True while today's live figure outruns the attributed activity feed —
+    /// the bar is an estimate until the feed publishes today's rows.
+    private var todayIsLiveEstimate: Bool {
+        let activityToday = series.first { $0.day == Day.utcToday() }?.costUSD ?? 0
+        return vendor.todayUSD > activityToday + 0.005
+    }
+
+    /// Live-estimated today renders dimmer than settled days so the two are
+    /// distinguishable at a glance; hover dimming still applies on top.
+    private func barOpacity(_ day: String) -> Double {
+        let base: Double = (hoverDay == nil || hoverDay == day) ? 0.7 : 0.3
+        return (day == Day.utcToday() && todayIsLiveEstimate) ? base * 0.55 : base
+    }
+
+    private func keyRowAXLabel(_ k: KeySpend, hasWindows: Bool) -> String {
+        var label = hasWindows
+            ? "\(k.apiKeyID), today \(axAmount(k.todayUSD)), month to date \(axAmount(k.mtdUSD)), 30 days \(axAmount(k.totalUSD))"
+            : "\(k.apiKeyID), total \(usd(k.totalUSD))"
+        if k.disabled { label += ", disabled" }
+        if let limit = k.limitUSD, limit > 0 {
+            let remaining = min(max(k.limitRemainingUSD ?? limit, 0), limit)
+            label += ", limit \(usd(remaining)) left of \(usd(limit))"
+            if let reset = k.limitReset { label += ", resets \(reset)" }
+        }
+        return label
     }
 
     /// "2026-07-19" → "Jul 19" for the hover readout.
