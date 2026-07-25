@@ -224,6 +224,22 @@ struct VendorCard: View {
     let toggle: () -> Void
     @State private var hoverDay: String?
 
+    /// Stable row identity across polls — KeySpend values change every ~5s,
+    /// so pins/hover must not key off the row value (spec: rename or top-5
+    /// eviction simply drops the pin).
+    struct KeyRowID: Hashable {
+        let accountID: String
+        let apiKeyID: String
+        init(_ k: KeySpend) { accountID = k.accountID; apiKeyID = k.apiKeyID }
+    }
+    @State private var pinnedKey: KeyRowID?
+    @State private var hoveredKey: KeyRowID?
+
+    /// Chevron + hover + pin only when rows have windows AND metadata (spec gate).
+    private var keyListInteractive: Bool {
+        vendor.hasKeyMetadata && vendor.topKeys.contains { $0.mtdUSD != nil }
+    }
+
     static let statWidth: CGFloat = 76
 
     private func statColumn(_ amount: String, label: String, color: Color, dim: Bool = false) -> some View {
@@ -365,47 +381,30 @@ struct VendorCard: View {
             // The single-column branch below remains only as a fallback for
             // old daemon data that predates per-key windows.
             if !vendor.topKeys.isEmpty {
-                Text(vendor.vendor == "anthropic" ? "API keys · est. spend" : "API keys")
-                    .font(.caption).foregroundStyle(.tertiary)
-            }
-            let hasWindows = vendor.topKeys.contains { $0.mtdUSD != nil }
-            ForEach(vendor.topKeys, id: \.self) { k in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(k.apiKeyID).font(.subheadline).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.tail)
-                        if k.disabled {
-                            Text("disabled").font(.caption2).foregroundStyle(.red)
-                        }
+                let hasWindows = vendor.topKeys.contains { $0.mtdUSD != nil }
+                // Column-header line for windowed data; legacy single-total
+                // rows keep the old plain label (and the old row format below).
+                if hasWindows {
+                    HStack(spacing: 0) {
+                        Text(vendor.vendor == "anthropic" ? "API KEYS · EST. SPEND" : "API KEYS")
                         Spacer(minLength: 8)
-                        if hasWindows {
-                            keyCell(k.todayUSD, color: .blue)
-                            keyCell(k.mtdUSD, color: .primary)
-                            keyCell(k.totalUSD, color: .secondary)
-                        } else {
-                            Text(usd(k.totalUSD)).font(.subheadline).foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
+                        Text("TODAY").frame(width: Self.statWidth, alignment: .trailing)
+                        Text("MTD").frame(width: Self.statWidth, alignment: .trailing)
+                        Text("30D").frame(width: Self.statWidth, alignment: .trailing)
                     }
-                    if let limit = k.limitUSD, limit > 0 {
-                        let remaining = min(max(k.limitRemainingUSD ?? limit, 0), limit)
-                        let fraction = 1 - remaining / limit
-                        HStack(spacing: 6) {
-                            ProgressView(value: fraction)
-                                .tint(fraction < 0.7 ? .green : (fraction < 0.9 ? .orange : .red))
-                                .controlSize(.mini)
-                                .frame(maxWidth: 120)
-                            Text("\(usd(remaining)) left of \(usd(limit))"
-                                 + (k.limitReset.map { " · resets \($0)" } ?? ""))
-                                .font(.caption2).foregroundStyle(.tertiary)
-                            Spacer(minLength: 0)
-                        }
-                    }
+                    .font(.system(size: 9, weight: .medium)).foregroundStyle(.tertiary)
+                    .padding(.bottom, 1)
+                    .overlay(alignment: .bottom) { Divider().opacity(0.5) }
+                } else {
+                    Text(vendor.vendor == "anthropic" ? "API keys · est. spend" : "API keys")
+                        .font(.caption).foregroundStyle(.tertiary)
                 }
-                // VoiceOver: bare amounts carry no column semantics — read the
-                // whole row as one element with named columns.
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(keyRowAXLabel(k, hasWindows: hasWindows))
+                ForEach(vendor.topKeys, id: \.rowID) { k in
+                    keyRow(k, hasWindows: hasWindows)
+                }
+                if keyListInteractive {
+                    inspectorLine
+                }
             }
         }
     }
@@ -445,13 +444,100 @@ struct VendorCard: View {
         var label = hasWindows
             ? "\(k.apiKeyID), today \(axAmount(k.todayUSD)), month to date \(axAmount(k.mtdUSD)), 30 days \(axAmount(k.totalUSD))"
             : "\(k.apiKeyID), total \(usd(k.totalUSD))"
-        if k.disabled { label += ", disabled" }
-        if let limit = k.limitUSD, limit > 0 {
-            let remaining = min(max(k.limitRemainingUSD ?? limit, 0), limit)
-            label += ", limit \(usd(remaining)) left of \(usd(limit))"
-            if let reset = k.limitReset { label += ", resets \(reset)" }
-        }
+        // Detail info must never be hover-only (spec: accessibility).
+        let d = k.detail()
+        label += ", " + d.leading
+        if let trailing = d.trailing { label += ", " + trailing }
         return label
+    }
+
+    /// Exhausted = known-zero remaining only; unknown (nil) is never red.
+    private func isCapped(_ k: KeySpend) -> Bool {
+        if let remaining = k.limitRemainingUSD { return remaining <= 0.01 }
+        return false
+    }
+
+    @ViewBuilder private func keyRow(_ k: KeySpend, hasWindows: Bool) -> some View {
+        let id = KeyRowID(k)
+        let interactive = keyListInteractive
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                if interactive {
+                    Image(systemName: pinnedKey == id ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8)).foregroundStyle(.quaternary)
+                }
+                Text(k.apiKeyID)
+                    .font(.subheadline)
+                    .foregroundStyle(isCapped(k) ? Color.red : Color.secondary)
+                    .strikethrough(k.disabled)
+                    .lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 8)
+                if hasWindows {
+                    keyCell(k.todayUSD, color: .blue)
+                    keyCell(k.mtdUSD, color: .primary)
+                    keyCell(k.totalUSD, color: .secondary)
+                } else {
+                    Text(usd(k.totalUSD)).font(.subheadline).foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.vertical, 1).padding(.horizontal, 4)
+            .background(hoveredKey == id && interactive ? Color.primary.opacity(0.06) : .clear,
+                        in: RoundedRectangle(cornerRadius: 4))
+            .padding(.horizontal, -4)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                guard interactive else { return }
+                if inside { hoveredKey = id } else if hoveredKey == id { hoveredKey = nil }
+            }
+            .onTapGesture {
+                guard interactive else { return }
+                pinnedKey = pinnedKey == id ? nil : id   // single pin per card
+            }
+            if interactive, pinnedKey == id {
+                let d = k.detail()
+                HStack {
+                    Text(d.leading).lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 8)
+                    if let trailing = d.trailing { Text(trailing).layoutPriority(1) }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.vertical, 3).padding(.horizontal, 6)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .opacity(k.disabled ? 0.55 : 1)
+        // VoiceOver: bare amounts carry no column semantics — read the whole
+        // row as one element with named columns.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(keyRowAXLabel(k, hasWindows: hasWindows))
+        .accessibilityValue(interactive ? (pinnedKey == id ? "expanded" : "collapsed") : "")
+        .accessibilityAction(named: pinnedKey == id ? "collapse details" : "expand details") {
+            guard interactive else { return }
+            pinnedKey = pinnedKey == id ? nil : id
+        }
+    }
+
+    /// Fixed-height line under the list: idle summary, or the hovered key's
+    /// detail. Reserved space — hover never shifts layout (spec H2).
+    private var inspectorLine: some View {
+        HStack {
+            if let hovered = vendor.topKeys.first(where: { KeyRowID($0) == hoveredKey }) {
+                let d = hovered.detail()
+                Text("\(hovered.apiKeyID) · \(d.leading)").lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 8)
+                if let trailing = d.trailing { Text(trailing).layoutPriority(1) }
+            } else {
+                Text(KeySpend.summaryLine(for: vendor.topKeys))
+                Spacer()
+            }
+        }
+        .font(.caption2).foregroundStyle(.tertiary)
+        .frame(height: 14)
+        .padding(.top, 2)
+        .overlay(alignment: .top) { Divider().opacity(0.5) }
+        .accessibilityHidden(true)   // redundant with per-row labels
+        .onDisappear { pinnedKey = nil; hoveredKey = nil }   // collapse/tab-switch clears pin
     }
 
     /// "2026-07-19" → "Jul 19" for the hover readout.
@@ -487,6 +573,11 @@ struct VendorCard: View {
         default: vendor.vendor.capitalized
         }
     }
+}
+
+extension KeySpend {
+    /// Stable ForEach identity (spec: never key rows by their mutable value).
+    var rowID: VendorCard.KeyRowID { .init(self) }
 }
 
 func usd(_ v: Double) -> String { String(format: "$%.2f", v) }
