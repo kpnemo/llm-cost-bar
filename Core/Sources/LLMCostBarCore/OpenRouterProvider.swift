@@ -107,22 +107,29 @@ public struct OpenRouterProvider: VendorProvider {
             let resp = try await getJSON("activity",
                                          query: [.init(name: "api_key_hash", value: hash)],
                                          as: ActivityResp.self)
-            var windowBeforeToday = 0.0, activityMTD = 0.0, activityToday = 0.0
+            var windowBeforeToday = 0.0, preMonthWindow = 0.0
+            var activityMTDBeforeToday = 0.0, activityToday = 0.0
             for row in resp.data where row.usage != 0 {
                 let day = String(row.date.prefix(10))
                 if day >= windowStart && day < today { windowBeforeToday += row.usage }
-                if day >= monthStart { activityMTD += row.usage }
+                if day >= windowStart && day < monthStart { preMonthWindow += row.usage }
+                if day >= monthStart && day < today { activityMTDBeforeToday += row.usage }
                 if day == today { activityToday += row.usage }
             }
-            // /activity only covers COMPLETED UTC days, so today/MTD prefer the
-            // key's live usage_daily/usage_monthly counters (credits-consistent,
-            // real-time); the activity sums remain as fallback for older shapes.
+            // /activity only covers COMPLETED UTC days (with up to ~24h publish
+            // lag), so today/MTD prefer the key's live usage_daily/usage_monthly
+            // counters (credits-consistent, real-time); the activity sums remain
+            // as fallback for older shapes.
             let todayUSD = key.usage_daily ?? activityToday
-            let mtdUSD = key.usage_monthly ?? activityMTD
-            // 30d mirrors the vendor header: window sum strictly before today,
-            // plus live today on top — never both an /activity today row and
-            // the live counter (double count), never neither (MTD > 30d bug).
-            let totalUSD = windowBeforeToday + todayUSD
+            let mtdUSD = key.usage_monthly ?? (activityMTDBeforeToday + todayUSD)
+            // 30d: the whole in-month portion rides the SAME live counter as
+            // MTD (pre-month activity + mtd), so MTD ≤ 30d holds even while
+            // /activity lags a just-completed in-month day (issue #3). Only on
+            // day ≥ 31 of a month (monthStart before the window) does the
+            // window fall back to activity-before-today + live today — there
+            // MTD > 30d is legitimate (day 1 is outside the window).
+            let totalUSD = monthStart >= windowStart ? preMonthWindow + mtdUSD
+                                                     : windowBeforeToday + todayUSD
             rows.append(KeyTotal(apiKeyID: name, totalUSD: totalUSD, todayUSD: todayUSD, mtdUSD: mtdUSD,
                                  limitUSD: key.limit, limitRemainingUSD: key.limit_remaining,
                                  limitReset: key.limit_reset, disabled: key.disabled ?? false,

@@ -306,6 +306,33 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertFalse(unlimited.disabled)
     }
 
+    /// Issue #4: at UTC midnight yesterday's spend leaves the live delta, but
+    /// the lagging activity feed hasn't published the completed day yet —
+    /// header MTD/30d must backfill it from consecutive baselines
+    /// (baseline(D+1) − baseline(D) − activity(D), clamped ≥ 0) and converge
+    /// with no double count once the activity rows land.
+    func testCompletedDayGapBackfillsHeaderUntilActivityCatchesUp() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q)
+        let store = UsageStore(db: q)
+        try store.addAccount(id: "a", vendor: "openrouter", displayName: "p")
+        // Yesterday (07-24) spent $10: baselines 70 → 80; today spent $0.50 live.
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "a", day: "2026-07-24", totalUsageUSD: 70)
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "a", day: "2026-07-25", totalUsageUSD: 80)
+        try store.upsertBalance(vendor: "openrouter", accountID: "a",
+                                balance: Balance(balanceUSD: 19.5, totalCreditsUSD: 100, totalUsageUSD: 80.5))
+        var s = try store.summary(today: "2026-07-25", monthPrefix: "2026-07", last30Start: "2026-06-26")
+        XCTAssertEqual(s.todayUSD, 0.5, accuracy: 0.001)
+        XCTAssertEqual(s.monthUSD, 10.5, accuracy: 0.001, "yesterday's $10 must not vanish at midnight")
+        XCTAssertEqual(s.last30USD, 10.5, accuracy: 0.001)
+        // /activity catches up with the real 07-24 rows → gap goes to 0, no double count.
+        try store.upsertUsage([UsageRecord(vendor: "openrouter", accountID: "a", apiKeyID: "k", model: "m",
+                                           day: "2026-07-24", requests: 1, tokensIn: 1, tokensOut: 1, costUSD: 10)])
+        s = try store.summary(today: "2026-07-25", monthPrefix: "2026-07", last30Start: "2026-06-26")
+        XCTAssertEqual(s.monthUSD, 10.5, accuracy: 0.001, "no double count after activity lands")
+        XCTAssertEqual(s.last30USD, 10.5, accuracy: 0.001)
+    }
+
     /// A key created today has 30d total 0 (activity covers completed days
     /// only) but live today/MTD > 0 — it must still appear in the key list.
     func testKeyWithZeroTotalButLiveTodayIsVisible() throws {

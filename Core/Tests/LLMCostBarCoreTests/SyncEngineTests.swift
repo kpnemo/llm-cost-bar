@@ -86,6 +86,31 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertTrue(log.contains { $0.errorClass == "transient" && $0.endpoint == "balance" })
     }
 
+    /// Issue #2: yesterday's last sync left total_usage 70 in balances; the
+    /// account spent $4 overnight BEFORE today's first sync (live total 74).
+    /// The day's baseline must be the carried-forward 70 — capturing the live
+    /// 74 would erase the $4 from header today/MTD/30d while the per-key
+    /// rows (vendor live counters) still show it.
+    func testBaselineCarriesForwardPriorTotalAcrossMidnight() async throws {
+        try store.upsertBalance(vendor: "openrouter", accountID: "acc1",
+                                balance: Balance(balanceUSD: 10, totalCreditsUSD: 80, totalUsageUSD: 70))
+        provider.balance = Balance(balanceUSD: 6, totalCreditsUSD: 80, totalUsageUSD: 74)
+        await engine.syncAll()
+        let s = try store.summary(today: Day.utcToday(), monthPrefix: Day.utcMonthPrefix(),
+                                  last30Start: Day.last30Start())
+        XCTAssertEqual(s.todayUSD, 4.0, accuracy: 0.001, "overnight gap spend must count toward today")
+    }
+
+    /// First-ever sync has no prior balance to carry forward — baseline is the
+    /// live value and today starts at zero (no phantom spend).
+    func testBaselineFirstEverSyncUsesLiveTotal() async throws {
+        provider.balance = Balance(balanceUSD: 6, totalCreditsUSD: 80, totalUsageUSD: 74)
+        await engine.syncAll()
+        let s = try store.summary(today: Day.utcToday(), monthPrefix: Day.utcMonthPrefix(),
+                                  last30Start: Day.last30Start())
+        XCTAssertEqual(s.todayUSD, 0.0, accuracy: 0.001)
+    }
+
     func testMissingCredentialLogsAuth() async throws {
         engine = SyncEngine(store: store, paths: AppPaths.resolve(),
                             providerFactory: { _, _ in self.provider },

@@ -228,10 +228,11 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(erik.apiKeyID, "erik")
         XCTAssertEqual(erik.todayUSD ?? -1, 20.05, accuracy: 0.001, "live counter, not lagging activity (0)")
         XCTAssertEqual(erik.mtdUSD ?? -1, 38.63, accuracy: 0.001)
-        // 30d = activity window BEFORE today + live today — same correction the
-        // vendor header applies. Activity-only (3.0) understated the column and
-        // made MTD > 30d on the real dashboard (v1.3.21 bug).
-        XCTAssertEqual(erik.totalUSD, 23.05, accuracy: 0.001, "30d must include live today (3.0 + 20.05)")
+        // 30d = pre-month activity window + live MTD (issue #3): the whole
+        // in-month portion rides the same live counter as the MTD column, so
+        // MTD ≤ 30d holds even while /activity lags a completed in-month day.
+        // Here: pre-month 06-30 row (3.0) + usage_monthly (38.63).
+        XCTAssertEqual(erik.totalUSD, 41.63, accuracy: 0.001, "30d = 3.0 pre-month + 38.63 live MTD")
         XCTAssertEqual(erik.limitUSD ?? -1, 20.0, accuracy: 0.001)
         XCTAssertEqual(erik.limitRemainingUSD ?? -1, 0.45, accuracy: 0.001)
         XCTAssertEqual(erik.limitReset, "monthly")
@@ -254,6 +255,30 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(totals.map(\.apiKeyID), ["fresh"])
         XCTAssertEqual(totals[0].totalUSD, 1.25, accuracy: 0.001, "trailing 30d includes live today")
         XCTAssertEqual(totals[0].todayUSD ?? -1, 1.25, accuracy: 0.001)
+    }
+
+    // Issue #3: on the morning of the 2nd, yesterday (the 1st) is a COMPLETED
+    // day that /activity hasn't published yet, but the live usage_monthly
+    // counter already includes it. The 30d column must never fall below MTD
+    // in that state (the whole 2-day month fits inside the 30d window).
+    func testEarlyMonthMTDNeverExceedsThirtyDayWhenActivityLagsYesterday() async throws {
+        let http = FakeHTTP()
+        http.responses["keys"] = (#"""
+        {"data":[{"name":"erik","label":"sk-1","hash":"hashEM0001","usage":30.0,
+          "usage_daily":1.0,"usage_monthly":11.0,"disabled":false}]}
+        """#, 200)
+        // /activity: only a pre-month day (06-20, $5); the $10 spent on 07-01
+        // is missing (publish lag), $1 today is live-counter-only.
+        http.responses["api_key_hash=hashEM0001"] = (#"""
+        {"data":[
+          {"date":"2026-06-20 00:00:00","model":"m","usage":5.0,"requests":1,"prompt_tokens":1,"completion_tokens":1}
+        ]}
+        """#, 200)
+        // 2026-07-02T09:00:00Z
+        let erik = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_982_800))[0]
+        XCTAssertEqual(erik.mtdUSD ?? -1, 11.0, accuracy: 0.001)
+        XCTAssertEqual(erik.totalUSD, 16.0, accuracy: 0.001, "pre-month 5.0 + live-month 11.0")
+        XCTAssertGreaterThanOrEqual(erik.totalUSD + 0.001, erik.mtdUSD ?? 0)
     }
 
     // Regression (v1.3.21, seen live): MTD $38.63 > 30d $18.58 on the erik key.
