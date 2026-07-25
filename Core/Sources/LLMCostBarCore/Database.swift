@@ -114,6 +114,14 @@ public enum Database {
             );
             """)
         }
+        m.registerMigration("v8-key-limits") { db in
+            try db.execute(sql: """
+            ALTER TABLE key_totals ADD COLUMN limit_usd REAL;
+            ALTER TABLE key_totals ADD COLUMN limit_remaining_usd REAL;
+            ALTER TABLE key_totals ADD COLUMN limit_reset TEXT;
+            ALTER TABLE key_totals ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;
+            """)
+        }
         return m
     }
 }

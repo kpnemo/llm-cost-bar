@@ -27,9 +27,18 @@ public struct KeyTotal: Equatable, Sendable {
     public var totalUSD: Double
     public var todayUSD: Double?
     public var mtdUSD: Double?
-    public init(apiKeyID: String, totalUSD: Double, todayUSD: Double? = nil, mtdUSD: Double? = nil) {
+    /// Key budget metadata (OpenRouter): nil limit = unlimited key.
+    public var limitUSD: Double?
+    public var limitRemainingUSD: Double?
+    public var limitReset: String?   // "daily" / "weekly" / "monthly"
+    public var disabled: Bool
+    public init(apiKeyID: String, totalUSD: Double, todayUSD: Double? = nil, mtdUSD: Double? = nil,
+                limitUSD: Double? = nil, limitRemainingUSD: Double? = nil, limitReset: String? = nil,
+                disabled: Bool = false) {
         self.apiKeyID = apiKeyID; self.totalUSD = totalUSD
         self.todayUSD = todayUSD; self.mtdUSD = mtdUSD
+        self.limitUSD = limitUSD; self.limitRemainingUSD = limitRemainingUSD
+        self.limitReset = limitReset; self.disabled = disabled
     }
 }
 
@@ -61,13 +70,40 @@ extension KeyTotal {
             }
             byName[name] = agg
         }
-        return byName.map { KeyTotal(apiKeyID: $0.key, totalUSD: $0.value.total,
-                                     todayUSD: $0.value.today, mtdUSD: $0.value.mtd) }
-            .sorted {
-                if ($0.mtdUSD ?? 0) != ($1.mtdUSD ?? 0) { return ($0.mtdUSD ?? 0) > ($1.mtdUSD ?? 0) }
-                if $0.totalUSD != $1.totalUSD { return $0.totalUSD > $1.totalUSD }
-                return $0.apiKeyID < $1.apiKeyID
+        return sortedForDisplay(byName.map { KeyTotal(apiKeyID: $0.key, totalUSD: $0.value.total,
+                                                      todayUSD: $0.value.today, mtdUSD: $0.value.mtd) })
+    }
+
+    /// Merge rows that share a display name into one, summing the money
+    /// windows. Budget fields only survive a merge when every merged key has
+    /// them (one unlimited key makes the combined budget unlimited → nil);
+    /// the merged row is disabled only if every underlying key is.
+    static func mergedByName(_ rows: [KeyTotal]) -> [KeyTotal] {
+        var byName: [String: KeyTotal] = [:]
+        for row in rows {
+            guard var agg = byName[row.apiKeyID] else { byName[row.apiKeyID] = row; continue }
+            agg.totalUSD += row.totalUSD
+            agg.todayUSD = (agg.todayUSD ?? 0) + (row.todayUSD ?? 0)
+            agg.mtdUSD = (agg.mtdUSD ?? 0) + (row.mtdUSD ?? 0)
+            if let a = agg.limitUSD, let b = row.limitUSD {
+                agg.limitUSD = a + b
+                agg.limitRemainingUSD = (agg.limitRemainingUSD ?? 0) + (row.limitRemainingUSD ?? 0)
+            } else {
+                agg.limitUSD = nil; agg.limitRemainingUSD = nil; agg.limitReset = nil
             }
+            agg.disabled = agg.disabled && row.disabled
+            byName[row.apiKeyID] = agg
+        }
+        return sortedForDisplay(Array(byName.values))
+    }
+
+    /// MTD desc, then total desc, then name asc (deterministic across refreshes).
+    static func sortedForDisplay(_ rows: [KeyTotal]) -> [KeyTotal] {
+        rows.sorted {
+            if ($0.mtdUSD ?? 0) != ($1.mtdUSD ?? 0) { return ($0.mtdUSD ?? 0) > ($1.mtdUSD ?? 0) }
+            if $0.totalUSD != $1.totalUSD { return $0.totalUSD > $1.totalUSD }
+            return $0.apiKeyID < $1.apiKeyID
+        }
     }
 }
 

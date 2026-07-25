@@ -16,6 +16,10 @@ public struct KeySpend: Equatable, Hashable, Sendable {
     public var totalUSD: Double   // trailing 30-day dollars, all vendors
     public var todayUSD: Double?  // nil when the vendor has no per-day key data
     public var mtdUSD: Double?
+    public var limitUSD: Double? = nil     // key budget; nil = unlimited
+    public var limitRemainingUSD: Double? = nil
+    public var limitReset: String? = nil   // "daily" / "weekly" / "monthly"
+    public var disabled: Bool = false
 }
 
 public struct VendorSummary: Equatable, Sendable {
@@ -107,9 +111,11 @@ public final class UsageStore: Sendable {
             for t in totals {
                 try db.execute(sql: """
                     INSERT OR REPLACE INTO key_totals
-                    (vendor, account_id, api_key_id, total_usd, today_usd, mtd_usd, fetched_at)
-                    VALUES (?,?,?,?,?,?,?)
+                    (vendor, account_id, api_key_id, total_usd, today_usd, mtd_usd,
+                     limit_usd, limit_remaining_usd, limit_reset, disabled, fetched_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """, arguments: [vendor, accountID, t.apiKeyID, t.totalUSD, t.todayUSD, t.mtdUSD,
+                                     t.limitUSD, t.limitRemainingUSD, t.limitReset, t.disabled,
                                      ISO8601DateFormatter().string(from: now)])
             }
         }
@@ -241,13 +247,20 @@ public final class UsageStore: Sendable {
                 let bal: Double? = balRow?["b"]
                 let credTotal: Double? = balRow?["tc"]
                 let credUsed: Double? = balRow?["tu"]
+                // total_usd is trailing-30d activity, which excludes today — a
+                // brand-new key spending right now has total 0 but today > 0,
+                // so visibility must consider every window, not just total.
                 let keys = try Row.fetchAll(db, sql: """
-                    SELECT account_id, api_key_id, total_usd, today_usd, mtd_usd FROM key_totals
-                    WHERE vendor = ? AND total_usd > 0
+                    SELECT account_id, api_key_id, total_usd, today_usd, mtd_usd,
+                           limit_usd, limit_remaining_usd, limit_reset, disabled
+                    FROM key_totals
+                    WHERE vendor = ? AND (total_usd > 0 OR COALESCE(today_usd, 0) > 0 OR COALESCE(mtd_usd, 0) > 0)
                     ORDER BY COALESCE(mtd_usd, total_usd) DESC, total_usd DESC, api_key_id ASC LIMIT 5
                     """, arguments: [vendor])
                     .map { KeySpend(accountID: $0["account_id"], apiKeyID: $0["api_key_id"],
-                                    totalUSD: $0["total_usd"], todayUSD: $0["today_usd"], mtdUSD: $0["mtd_usd"]) }
+                                    totalUSD: $0["total_usd"], todayUSD: $0["today_usd"], mtdUSD: $0["mtd_usd"],
+                                    limitUSD: $0["limit_usd"], limitRemainingUSD: $0["limit_remaining_usd"],
+                                    limitReset: $0["limit_reset"], disabled: $0["disabled"]) }
                 return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, last30USD: last30BeforeToday + t,
                                      balanceUSD: bal, creditsTotalUSD: credTotal, creditsUsedUSD: credUsed, topKeys: keys)
             }

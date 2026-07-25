@@ -34,6 +34,11 @@ public struct OpenRouterProvider: VendorProvider {
             let label: String?
             let hash: String?
             let usage: Double?
+            let usage_daily: Double?     // live, current UTC day — /activity only has completed days
+            let usage_monthly: Double?   // live, current UTC month
+            let limit: Double?
+            let limit_remaining: Double?
+            let limit_reset: String?
             let disabled: Bool?
         }
         let data: [K]
@@ -75,11 +80,12 @@ public struct OpenRouterProvider: VendorProvider {
                        totalUsageUSD: resp.data.total_usage)
     }
 
-    /// Real per-key per-day dollars: /keys supplies name + hash, then one
-    /// /activity?api_key_hash= call per key returns its daily usage. Keys
-    /// without a hash (or with no activity in the window) drop out; display
-    /// name falls back name → label → "unnamed". Requires a management key,
-    /// same as the pooled /activity call.
+    /// Real per-key dollars: /keys supplies name + hash + live usage_daily/
+    /// usage_monthly + budget limits, then one /activity?api_key_hash= call
+    /// per key returns its daily usage for the 30d column. Keys without a
+    /// hash (or with zero spend in every window) drop out; display name falls
+    /// back name → label → "unnamed". Requires a management key, same as the
+    /// pooled /activity call.
     ///
     /// This is N+1 serial GETs (one /keys call, then one /activity call per
     /// key), and the whole thing is retried wholesale by SyncEngine's
@@ -89,19 +95,36 @@ public struct OpenRouterProvider: VendorProvider {
     /// re-fetch everyone else's activity.
     public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
         let keys = try await getJSON("keys", as: KeysListResp.self).data
-        var perKeyDay: [String: [String: Double]] = [:]   // display name → day → usd
+        let today = Day.utcToday(now: now)
+        let monthStart = Day.utcMonthPrefix(now: now) + "-01"
+        let windowStart = Day.last30Start(now: now)
+        var rows: [KeyTotal] = []
         for key in keys {
             guard let hash = key.hash else { continue }
+            // Identity is the hash (stable across renames); the display name is
+            // re-read every sync, so a rename simply relabels the row next poll.
             let name = key.name ?? key.label ?? "unnamed"
             let resp = try await getJSON("activity",
                                          query: [.init(name: "api_key_hash", value: hash)],
                                          as: ActivityResp.self)
+            var total = 0.0, activityMTD = 0.0, activityToday = 0.0
             for row in resp.data where row.usage != 0 {
-                perKeyDay[name, default: [:]][String(row.date.prefix(10)), default: 0] += row.usage
+                let day = String(row.date.prefix(10))
+                if day >= windowStart { total += row.usage }
+                if day >= monthStart { activityMTD += row.usage }
+                if day == today { activityToday += row.usage }
             }
+            // /activity only covers COMPLETED UTC days, so today/MTD prefer the
+            // key's live usage_daily/usage_monthly counters (credits-consistent,
+            // real-time); the activity sums remain as fallback for older shapes.
+            let todayUSD = key.usage_daily ?? activityToday
+            let mtdUSD = key.usage_monthly ?? activityMTD
+            guard total > 0 || todayUSD > 0 || mtdUSD > 0 else { continue }
+            rows.append(KeyTotal(apiKeyID: name, totalUSD: total, todayUSD: todayUSD, mtdUSD: mtdUSD,
+                                 limitUSD: key.limit, limitRemainingUSD: key.limit_remaining,
+                                 limitReset: key.limit_reset, disabled: key.disabled ?? false))
         }
-        guard !perKeyDay.isEmpty else { return [] }
-        return KeyTotal.aggregate(perKeyDay: perKeyDay, names: [:], now: now)
+        return KeyTotal.mergedByName(rows)
     }
 
     public func fetchUsage(sinceDaysAgo: Int, now: Date = Date()) async throws -> [UsageRecord] {
@@ -109,14 +132,31 @@ public struct OpenRouterProvider: VendorProvider {
         let keyLabel = (try? await validateCredentials().label) ?? "default"
         let resp = try await getJSON("activity", as: ActivityResp.self)
         let cutoff = Day.utcToday(now: now.addingTimeInterval(-Double(sinceDaysAgo) * 86400))
-        return resp.data.filter { $0.date >= cutoff }.map { row in
-            UsageRecord(vendor: vendorID, accountID: accountID, apiKeyID: keyLabel,
-                        // Live API returns "2026-07-18 00:00:00"; normalize to the bare
-                        // day key the store's exact-match queries use.
-                        model: row.model, day: String(row.date.prefix(10)),
-                        requests: row.requests ?? 0,
-                        tokensIn: row.prompt_tokens ?? 0, tokensOut: row.completion_tokens ?? 0,
-                        costUSD: row.usage)
+        // /activity groups rows per ENDPOINT, so one model can span several rows
+        // on the same day (different providers). The store upserts on
+        // (model, day) — sum here, or colliding rows overwrite and drop spend.
+        var order: [String] = []
+        var merged: [String: UsageRecord] = [:]
+        for row in resp.data where row.date >= cutoff {
+            // Live API returns "2026-07-18 00:00:00"; normalize to the bare
+            // day key the store's exact-match queries use.
+            let day = String(row.date.prefix(10))
+            let key = day + "|" + row.model
+            if var r = merged[key] {
+                r.requests += row.requests ?? 0
+                r.tokensIn += row.prompt_tokens ?? 0
+                r.tokensOut += row.completion_tokens ?? 0
+                r.costUSD += row.usage
+                merged[key] = r
+            } else {
+                order.append(key)
+                merged[key] = UsageRecord(vendor: vendorID, accountID: accountID, apiKeyID: keyLabel,
+                                          model: row.model, day: day,
+                                          requests: row.requests ?? 0,
+                                          tokensIn: row.prompt_tokens ?? 0, tokensOut: row.completion_tokens ?? 0,
+                                          costUSD: row.usage)
+            }
         }
+        return order.compactMap { merged[$0] }
     }
 }
