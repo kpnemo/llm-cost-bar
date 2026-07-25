@@ -4,6 +4,13 @@ import os
 /// One sync cycle over all active accounts. Owns the error taxonomy → DB state mapping:
 /// transient → logged, data stays stale; auth → needs_reauth; success → upserts + last_sync_ok.
 public final class SyncEngine: @unchecked Sendable {
+    /// The one usage-fetch window, shared with providers that derive rates
+    /// from the fetched span (AnthropicProvider's same-day estimation): the
+    /// implied $/token rate depends on the window, so header (usage_daily)
+    /// and per-key paths MUST fetch the same number of days or the card
+    /// total diverges from the sum of key rows (issue #1).
+    public static let usageWindowDays = 35
+
     private let store: UsageStore
     private let paths: AppPaths
     private let providerFactory: (AccountRow, Credential) -> VendorProvider
@@ -54,7 +61,7 @@ public final class SyncEngine: @unchecked Sendable {
         let usageOK: Bool
         do {
             let usage = try await withRetry(sleeper: sleeper) {
-                try await provider.fetchUsage(sinceDaysAgo: 35, now: Date())
+                try await provider.fetchUsage(sinceDaysAgo: Self.usageWindowDays, now: Date())
             }
             try store.upsertUsage(usage)
             try store.markSyncOK(accountID: account.id)
@@ -76,10 +83,19 @@ public final class SyncEngine: @unchecked Sendable {
         // or clears the sync-ok state set above. Only .auth here implies the key is genuinely dead.
         do {
             if let balance = try await withRetry(sleeper: sleeper) { try await provider.fetchBalance() } {
+                // Read the prior stored total BEFORE overwriting it: a new
+                // day's baseline is the carried-forward last-known total, so
+                // spend between UTC midnight and this first poll still lands
+                // in today's live delta (issue #2). recordDailyBaseline is
+                // INSERT OR IGNORE, so this only matters at first-of-day;
+                // first-ever sync has no prior and uses the live value.
+                let carriedForward = (try? store.lastKnownTotalUsage(vendor: account.vendor,
+                                                                     accountID: account.id)) ?? nil
                 try store.upsertBalance(vendor: account.vendor, accountID: account.id, balance: balance)
                 if let totalUsage = balance.totalUsageUSD {
                     try store.recordDailyBaseline(vendor: account.vendor, accountID: account.id,
-                                                  day: Day.utcToday(), totalUsageUSD: totalUsage)
+                                                  day: Day.utcToday(),
+                                                  totalUsageUSD: carriedForward ?? totalUsage)
                 }
             }
         } catch let e as ProviderError {

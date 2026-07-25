@@ -140,7 +140,11 @@ public struct AnthropicProvider: VendorProvider {
     /// window has zero usage weight is dropped (matches the returns-empty
     /// contract when there is no usage at all).
     public func fetchKeyTotals(now: Date = Date()) async throws -> [KeyTotal] {
-        let days = 30
+        // MUST match the header's fetch window: the same-day estimate uses an
+        // implied $/token rate computed over the fetched span, so a different
+        // window here makes the per-key todays sum to a different number than
+        // the header's estimated-today row (issue #1).
+        let days = SyncEngine.usageWindowDays
         let startDay = Day.utcToday(now: now.addingTimeInterval(-Double(days) * 86400))
         let endDay = Day.utcToday(now: now.addingTimeInterval(86400))
 

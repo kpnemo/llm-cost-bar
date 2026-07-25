@@ -108,6 +108,64 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(totals[0].todayUSD ?? -1, 0.0, accuracy: 0.01) // fixtures are 07-18, now is 07-20
     }
 
+    // Issue #1: the header's estimated-today (usage_daily, written from
+    // SyncEngine's fetchUsage window) and the per-key allocated today
+    // (fetchKeyTotals' internal fetchUsage) must use the SAME window — the
+    // implied $/token rate is computed over whatever window was fetched, so a
+    // 35d header rate vs 30d per-key rate makes the card diverge from the sum
+    // of key rows. Stubs are keyed by starting_at, so a window mismatch fetches
+    // different data and the equality below fails.
+    func testPerKeyTodayEstimateSumsToHeaderEstimate() async throws {
+        // now = 2026-07-20: 35d start = 2026-06-15, 30d start = 2026-06-20.
+        // Rate-shifting old day 06-17 (opus $30 / weight 1000) exists ONLY in
+        // the 35d window: rate35 = (30+10)/2000 = 0.02; rate30 = 10/1000 = 0.01.
+        let usage35 = #"""
+        {"data":[
+          {"starting_at":"2026-06-17T00:00:00Z","ending_at":"2026-06-18T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]},
+          {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]},
+          {"starting_at":"2026-07-20T00:00:00Z","ending_at":"2026-07-21T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let usage30 = #"""
+        {"data":[
+          {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]},
+          {"starting_at":"2026-07-20T00:00:00Z","ending_at":"2026-07-21T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let cost35 = #"""
+        {"data":[
+          {"starting_at":"2026-06-17T00:00:00Z","ending_at":"2026-06-18T00:00:00Z","results":[
+            {"currency":"USD","amount":"3000","model":"claude-opus-4-8","description":"opus"}]},
+          {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+            {"currency":"USD","amount":"1000","model":"claude-opus-4-8","description":"opus"}]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let cost30 = #"""
+        {"data":[
+          {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+            {"currency":"USD","amount":"1000","model":"claude-opus-4-8","description":"opus"}]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let http = FakeHTTP()
+        http.responses["usage_report/messages?starting_at=2026-06-15"] = (usage35, 200)
+        http.responses["usage_report/messages?starting_at=2026-06-20"] = (usage30, 200)
+        http.responses["cost_report?starting_at=2026-06-15"] = (cost35, 200)
+        http.responses["cost_report?starting_at=2026-06-20"] = (cost30, 200)
+        http.responses["api_keys"] = (keysListJSON, 200)
+        let provider = makeProvider(http)
+        let header = try await provider.fetchUsage(sinceDaysAgo: SyncEngine.usageWindowDays, now: julyTwentiethNoon)
+        let estToday = header.first { $0.model == AnthropicProvider.estimatedModel && $0.day == "2026-07-20" }?.costUSD ?? -1
+        XCTAssertEqual(estToday, 20.0, accuracy: 0.01, "header estimate uses the 35d implied rate")
+        let totals = try await provider.fetchKeyTotals(now: julyTwentiethNoon)
+        XCTAssertEqual(totals.map { $0.todayUSD ?? 0 }.reduce(0, +), estToday, accuracy: 0.01,
+                       "per-key today must sum to the header's estimated today (issue #1)")
+    }
+
     func testKeyTotalsEmptyWhenNoUsage() async throws {
         let http = FakeHTTP()
         http.responses["usage_report"] = (#"{"data":[],"has_more":false,"next_page":null}"#, 200)

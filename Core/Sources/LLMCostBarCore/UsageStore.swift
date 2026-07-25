@@ -125,6 +125,17 @@ public final class UsageStore: Sendable {
         }
     }
 
+    /// The stored (pre-refresh) lifetime usage counter for one account —
+    /// the carry-forward source for a new day's baseline: spend between UTC
+    /// midnight and the day's first poll must count toward today (issue #2),
+    /// so the baseline is the LAST-KNOWN total, not the live one.
+    public func lastKnownTotalUsage(vendor: String, accountID: String) throws -> Double? {
+        try db.read { db in
+            try Double.fetchOne(db, sql: "SELECT total_usage FROM balances WHERE vendor = ? AND account_id = ?",
+                                arguments: [vendor, accountID])
+        }
+    }
+
     public func upsertBalance(vendor: String, accountID: String, balance: Balance, now: Date = Date()) throws {
         try db.write { db in
             try db.execute(sql: """
@@ -197,6 +208,27 @@ public final class UsageStore: Sendable {
                        last30USD: vendors.reduce(0) { $0 + $1.last30USD })
     }
 
+    /// Spend on COMPLETED days that the vendor's lagging activity feed hasn't
+    /// published yet (issue #4): a completed day D really spent
+    /// baseline(D+1) − baseline(D); whatever usage_daily already has for D is
+    /// subtracted, the rest (clamped ≥ 0) is the gap to backfill. Converges to
+    /// 0 as activity rows land, so nothing is ever double-counted. Days are
+    /// bounded to [from, to) — pass the window start and today.
+    private static func completedDayGaps(_ db: GRDB.Database, vendor: String, accountID: String,
+                                         from: String, to: String) throws -> Double {
+        try Double.fetchOne(db, sql: """
+            SELECT COALESCE(SUM(MAX(s2.baseline_usage_usd - s1.baseline_usage_usd
+                                    - COALESCE(u.c, 0), 0)), 0)
+            FROM usage_snapshots s1
+            JOIN usage_snapshots s2 ON s2.vendor = s1.vendor AND s2.account_id = s1.account_id
+                 AND s2.day = date(s1.day, '+1 day')
+            LEFT JOIN (SELECT day, SUM(cost_usd) AS c FROM usage_daily
+                       WHERE vendor = ? AND account_id = ? GROUP BY day) u
+                 ON u.day = s1.day
+            WHERE s1.vendor = ? AND s1.account_id = ? AND s1.day >= ? AND s1.day < ?
+            """, arguments: [vendor, accountID, vendor, accountID, from, to]) ?? 0
+    }
+
     /// One account's (current lifetime usage − today's first-sync baseline), clamped ≥ 0.
     private static func liveTodayDelta(_ db: GRDB.Database, vendor: String, accountID: String, today: String) throws -> Double {
         try Double.fetchOne(db, sql: """
@@ -230,20 +262,28 @@ public final class UsageStore: Sendable {
                     SELECT id FROM accounts WHERE vendor = ?
                     UNION SELECT DISTINCT account_id FROM usage_daily WHERE vendor = ?
                     """, arguments: [vendor, vendor])
-                var t = 0.0
+                var t = 0.0, gapMonth = 0.0, gap30 = 0.0
                 for accountID in accountIDs {
                     let activityToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND account_id = ? AND day = ?",
                                                             arguments: [vendor, accountID, today]) ?? 0
                     let liveDelta = try Self.liveTodayDelta(db, vendor: vendor, accountID: accountID, today: today)
                     t += max(activityToday, liveDelta)
+                    // Completed days the activity feed hasn't published yet
+                    // (yesterday, right after UTC midnight) — backfilled from
+                    // baseline deltas so MTD/30d don't dip for a day (issue #4).
+                    gapMonth += try Self.completedDayGaps(db, vendor: vendor, accountID: accountID,
+                                                          from: monthPrefix + "-01", to: today)
+                    gap30 += try Self.completedDayGaps(db, vendor: vendor, accountID: accountID,
+                                                       from: last30Start, to: today)
                 }
                 let monthBeforeToday = try Double.fetchOne(db, sql: "SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily WHERE vendor = ? AND day LIKE ? || '%' AND day < ?",
                                                            arguments: [vendor, monthPrefix, today]) ?? 0
-                let m = monthBeforeToday + t
+                let m = monthBeforeToday + gapMonth + t
                 let last30BeforeToday = try Double.fetchOne(db, sql: """
                     SELECT COALESCE(SUM(cost_usd),0) FROM usage_daily
                     WHERE vendor = ? AND day >= ? AND day < ?
                     """, arguments: [vendor, last30Start, today]) ?? 0
+                let last30 = last30BeforeToday + gap30 + t
                 let balRow = try Row.fetchOne(db, sql: """
                     SELECT SUM(balance_usd) AS b, SUM(total_credits) AS tc, SUM(total_usage) AS tu
                     FROM balances WHERE vendor = ?
@@ -267,7 +307,7 @@ public final class UsageStore: Sendable {
                                     limitReset: $0["limit_reset"], disabled: $0["disabled"],
                                     lifetimeUSD: $0["lifetime_usd"]) }
                 let hasKeyMetadata = keys.contains { $0.limitUSD != nil || $0.lifetimeUSD != nil || $0.disabled }
-                return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, last30USD: last30BeforeToday + t,
+                return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, last30USD: last30,
                                      balanceUSD: bal, creditsTotalUSD: credTotal, creditsUsedUSD: credUsed,
                                      topKeys: keys, hasKeyMetadata: hasKeyMetadata)
             }
