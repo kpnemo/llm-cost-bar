@@ -228,7 +228,10 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(erik.apiKeyID, "erik")
         XCTAssertEqual(erik.todayUSD ?? -1, 20.05, accuracy: 0.001, "live counter, not lagging activity (0)")
         XCTAssertEqual(erik.mtdUSD ?? -1, 38.63, accuracy: 0.001)
-        XCTAssertEqual(erik.totalUSD, 3.0, accuracy: 0.001, "30d column still from activity window")
+        // 30d = activity window BEFORE today + live today — same correction the
+        // vendor header applies. Activity-only (3.0) understated the column and
+        // made MTD > 30d on the real dashboard (v1.3.21 bug).
+        XCTAssertEqual(erik.totalUSD, 23.05, accuracy: 0.001, "30d must include live today (3.0 + 20.05)")
         XCTAssertEqual(erik.limitUSD ?? -1, 20.0, accuracy: 0.001)
         XCTAssertEqual(erik.limitRemainingUSD ?? -1, 0.45, accuracy: 0.001)
         XCTAssertEqual(erik.limitReset, "monthly")
@@ -249,8 +252,39 @@ final class OpenRouterProviderTests: XCTestCase {
         http.responses["api_key_hash=hashNEW001"] = (#"{"data":[]}"#, 200)
         let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
         XCTAssertEqual(totals.map(\.apiKeyID), ["fresh"])
-        XCTAssertEqual(totals[0].totalUSD, 0, accuracy: 0.001)
+        XCTAssertEqual(totals[0].totalUSD, 1.25, accuracy: 0.001, "trailing 30d includes live today")
         XCTAssertEqual(totals[0].todayUSD ?? -1, 1.25, accuracy: 0.001)
+    }
+
+    // Regression (v1.3.21, seen live): MTD $38.63 > 30d $18.58 on the erik key.
+    // The 30d column summed only /activity (completed days), while MTD came
+    // from the live monthly counter including today. Whenever the whole month
+    // fits inside the trailing-30d window, MTD ≤ 30d must hold — so 30d is
+    // activity-before-today plus live today, and an /activity row for today
+    // (if OpenRouter ever publishes one intraday) must not double-count.
+    func testThirtyDayColumnIncludesLiveTodayAndNeverUndercutsMTD() async throws {
+        let http = FakeHTTP()
+        http.responses["keys"] = (#"""
+        {"data":[{"name":"erik","label":"sk-1","hash":"hashINV001","usage":84.04,
+          "usage_daily":20.05,"usage_monthly":38.63,"limit":20.0,"limit_remaining":0.0,
+          "limit_reset":"weekly","disabled":false}]}
+        """#, 200)
+        // 15.00 + 3.58 completed July days; the 07-25 row simulates an intraday
+        // publish and must be superseded by usage_daily, not added on top.
+        http.responses["api_key_hash=hashINV001"] = (#"""
+        {"data":[
+          {"date":"2026-07-02 00:00:00","model":"m","usage":15.00,"requests":1,"prompt_tokens":1,"completion_tokens":1},
+          {"date":"2026-07-18 00:00:00","model":"m","usage":3.58,"requests":1,"prompt_tokens":1,"completion_tokens":1},
+          {"date":"2026-07-25 00:00:00","model":"m","usage":0.50,"requests":1,"prompt_tokens":1,"completion_tokens":1}
+        ]}
+        """#, 200)
+        // 2026-07-25T12:00:00Z
+        let now = Date(timeIntervalSince1970: 1_784_980_800)
+        let erik = try await makeProvider(http).fetchKeyTotals(now: now)[0]
+        XCTAssertEqual(erik.totalUSD, 38.63, accuracy: 0.001, "18.58 before-today + 20.05 live today")
+        XCTAssertEqual(erik.mtdUSD ?? -1, 38.63, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(erik.totalUSD + 0.001, erik.mtdUSD ?? 0,
+                                    "month inside window → MTD may never exceed 30d")
     }
 
     func testKeyTotalsCarryLifetimeUsage() async throws {
