@@ -253,6 +253,37 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(totals[0].todayUSD ?? -1, 1.25, accuracy: 0.001)
     }
 
+    func testKeyTotalsCarryLifetimeUsage() async throws {
+        let http = FakeHTTP()
+        http.responses["keys"] = (#"""
+        {"data":[{"name":"erik","label":"sk-1","hash":"hashLT0001","usage":84.04,
+          "usage_daily":20.05,"usage_monthly":38.63,"disabled":false}]}
+        """#, 200)
+        http.responses["api_key_hash=hashLT0001"] = (#"{"data":[]}"#, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+        XCTAssertEqual(totals[0].lifetimeUSD ?? -1, 84.04, accuracy: 0.001)
+    }
+
+    // Spec: merge FIRST, then filter — a zero-spend same-name sibling must still
+    // contribute its metadata (lifetime/limit) to the surviving merged row.
+    func testZeroSpendSiblingContributesMetadataBeforeFiltering() async throws {
+        let http = FakeHTTP()
+        http.responses["keys"] = (#"""
+        {"data":[
+          {"name":"shared","label":"sk-1","hash":"hashMF0001","usage":10.0,
+           "usage_daily":1.0,"usage_monthly":1.0,"limit":20.0,"limit_remaining":19.0,"limit_reset":"weekly","disabled":false},
+          {"name":"shared","label":"sk-2","hash":"hashMF0002","usage":3.0,
+           "usage_daily":0.0,"usage_monthly":0.0,"limit":10.0,"limit_remaining":10.0,"limit_reset":"weekly","disabled":false}
+        ]}
+        """#, 200)
+        http.responses["api_key_hash="] = (#"{"data":[]}"#, 200)
+        let totals = try await makeProvider(http).fetchKeyTotals(now: Date(timeIntervalSince1970: 1_782_907_200))
+        XCTAssertEqual(totals.count, 1)
+        XCTAssertEqual(totals[0].lifetimeUSD ?? -1, 13.0, accuracy: 0.001, "zero-spend sibling's lifetime merged in")
+        XCTAssertEqual(totals[0].limitUSD ?? -1, 30.0, accuracy: 0.001)
+        XCTAssertEqual(totals[0].limitRemainingUSD ?? -1, 29.0, accuracy: 0.001)
+    }
+
     func testTwoKeysSameDisplayNameMergeIntoOneSummedRow() async throws {
         let http = FakeHTTP()
         let keysJSON = #"""
