@@ -20,6 +20,7 @@ public struct KeySpend: Equatable, Hashable, Sendable {
     public var limitRemainingUSD: Double? = nil
     public var limitReset: String? = nil   // "daily" / "weekly" / "monthly"
     public var disabled: Bool = false
+    public var lifetimeUSD: Double? = nil  // vendor-reported lifetime spend
 }
 
 public struct VendorSummary: Equatable, Sendable {
@@ -31,6 +32,9 @@ public struct VendorSummary: Equatable, Sendable {
     public var creditsTotalUSD: Double?
     public var creditsUsedUSD: Double?
     public var topKeys: [KeySpend]
+    /// True when any DISPLAYED key row carries limit/lifetime/disabled
+    /// metadata — the UI's gate for chevron + inspector interactivity.
+    public var hasKeyMetadata: Bool = false
 }
 
 public struct DayCost: Equatable, Hashable, Sendable {
@@ -112,10 +116,10 @@ public final class UsageStore: Sendable {
                 try db.execute(sql: """
                     INSERT OR REPLACE INTO key_totals
                     (vendor, account_id, api_key_id, total_usd, today_usd, mtd_usd,
-                     limit_usd, limit_remaining_usd, limit_reset, disabled, fetched_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     limit_usd, limit_remaining_usd, limit_reset, disabled, lifetime_usd, fetched_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                     """, arguments: [vendor, accountID, t.apiKeyID, t.totalUSD, t.todayUSD, t.mtdUSD,
-                                     t.limitUSD, t.limitRemainingUSD, t.limitReset, t.disabled,
+                                     t.limitUSD, t.limitRemainingUSD, t.limitReset, t.disabled, t.lifetimeUSD,
                                      ISO8601DateFormatter().string(from: now)])
             }
         }
@@ -252,7 +256,7 @@ public final class UsageStore: Sendable {
                 // so visibility must consider every window, not just total.
                 let keys = try Row.fetchAll(db, sql: """
                     SELECT account_id, api_key_id, total_usd, today_usd, mtd_usd,
-                           limit_usd, limit_remaining_usd, limit_reset, disabled
+                           limit_usd, limit_remaining_usd, limit_reset, disabled, lifetime_usd
                     FROM key_totals
                     WHERE vendor = ? AND (total_usd > 0 OR COALESCE(today_usd, 0) > 0 OR COALESCE(mtd_usd, 0) > 0)
                     ORDER BY COALESCE(mtd_usd, total_usd) DESC, total_usd DESC, api_key_id ASC LIMIT 5
@@ -260,9 +264,12 @@ public final class UsageStore: Sendable {
                     .map { KeySpend(accountID: $0["account_id"], apiKeyID: $0["api_key_id"],
                                     totalUSD: $0["total_usd"], todayUSD: $0["today_usd"], mtdUSD: $0["mtd_usd"],
                                     limitUSD: $0["limit_usd"], limitRemainingUSD: $0["limit_remaining_usd"],
-                                    limitReset: $0["limit_reset"], disabled: $0["disabled"]) }
+                                    limitReset: $0["limit_reset"], disabled: $0["disabled"],
+                                    lifetimeUSD: $0["lifetime_usd"]) }
+                let hasKeyMetadata = keys.contains { $0.limitUSD != nil || $0.lifetimeUSD != nil || $0.disabled }
                 return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, last30USD: last30BeforeToday + t,
-                                     balanceUSD: bal, creditsTotalUSD: credTotal, creditsUsedUSD: credUsed, topKeys: keys)
+                                     balanceUSD: bal, creditsTotalUSD: credTotal, creditsUsedUSD: credUsed,
+                                     topKeys: keys, hasKeyMetadata: hasKeyMetadata)
             }
         }
     }

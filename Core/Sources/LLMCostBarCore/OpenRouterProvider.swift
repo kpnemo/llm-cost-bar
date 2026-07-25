@@ -119,12 +119,18 @@ public struct OpenRouterProvider: VendorProvider {
             // real-time); the activity sums remain as fallback for older shapes.
             let todayUSD = key.usage_daily ?? activityToday
             let mtdUSD = key.usage_monthly ?? activityMTD
-            guard total > 0 || todayUSD > 0 || mtdUSD > 0 else { continue }
             rows.append(KeyTotal(apiKeyID: name, totalUSD: total, todayUSD: todayUSD, mtdUSD: mtdUSD,
                                  limitUSD: key.limit, limitRemainingUSD: key.limit_remaining,
-                                 limitReset: key.limit_reset, disabled: key.disabled ?? false))
+                                 limitReset: key.limit_reset, disabled: key.disabled ?? false,
+                                 lifetimeUSD: key.usage))
         }
-        return KeyTotal.mergedByName(rows)
+        // Merge BEFORE the visibility filter so a zero-spend same-name sibling
+        // still contributes lifetime/limit metadata to the surviving row. Keys
+        // without a hash never get here (can't be fetched per-key); a merged
+        // group with zero spend in every window stays hidden by design.
+        return KeyTotal.mergedByName(rows).filter {
+            $0.totalUSD > 0 || ($0.todayUSD ?? 0) > 0 || ($0.mtdUSD ?? 0) > 0
+        }
     }
 
     public func fetchUsage(sinceDaysAgo: Int, now: Date = Date()) async throws -> [UsageRecord] {

@@ -122,6 +122,9 @@ public enum Database {
             ALTER TABLE key_totals ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;
             """)
         }
+        m.registerMigration("v9-key-lifetime") { db in
+            try db.execute(sql: "ALTER TABLE key_totals ADD COLUMN lifetime_usd REAL;")
+        }
         return m
     }
 }

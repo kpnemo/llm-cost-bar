@@ -321,6 +321,61 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(keys.map(\.apiKeyID), ["fresh"], "live-only key shows; all-zero key stays hidden")
     }
 
+    func testLifetimeRoundTripAndMetadataGate() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q)
+        let store = UsageStore(db: q)
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
+            KeyTotal(apiKeyID: "erik", totalUSD: 18.58, todayUSD: 20.05, mtdUSD: 38.63,
+                     limitUSD: 20, limitRemainingUSD: 0, limitReset: "weekly", lifetimeUSD: 84.04),
+        ])
+        try store.upsertKeyTotals(vendor: "openai", accountID: "a", totals: [
+            KeyTotal(apiKeyID: "plain", totalUSD: 5, todayUSD: 1, mtdUSD: 2),
+        ])
+        let vendors = try store.vendorSummaries(today: "2026-07-25", monthPrefix: "2026-07", last30Start: "2026-06-26")
+        let or = vendors.first { $0.vendor == "openrouter" }!
+        XCTAssertEqual(or.topKeys[0].lifetimeUSD ?? -1, 84.04, accuracy: 0.001)
+        XCTAssertTrue(or.hasKeyMetadata)
+        let oa = vendors.first { $0.vendor == "openai" }!
+        XCTAssertNil(oa.topKeys[0].lifetimeUSD)
+        XCTAssertFalse(oa.hasKeyMetadata, "no limit/lifetime/disabled → gate off")
+    }
+
+    /// Metadata gate scans only the DISPLAYED rows: metadata on a key that
+    /// ranks below the top 5 must not enable chevrons for the visible five.
+    func testMetadataOnlyOutsideTopFiveKeepsGateOff() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q)
+        let store = UsageStore(db: q)
+        var totals = (1...5).map { KeyTotal(apiKeyID: "key\($0)", totalUSD: Double(10 + $0), todayUSD: 0, mtdUSD: Double(10 + $0)) }
+        totals.append(KeyTotal(apiKeyID: "tiny-limited", totalUSD: 0.5, todayUSD: 0, mtdUSD: 0.5,
+                               limitUSD: 20, limitRemainingUSD: 20, lifetimeUSD: 0.5))
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: totals)
+        let or = try store.vendorSummaries(today: "2026-07-25", monthPrefix: "2026-07", last30Start: "2026-06-26")[0]
+        XCTAssertEqual(or.topKeys.count, 5)
+        XCTAssertFalse(or.topKeys.contains { $0.apiKeyID == "tiny-limited" })
+        XCTAssertFalse(or.hasKeyMetadata)
+    }
+
+    /// v8 → v9: existing key_totals rows survive with lifetime_usd NULL.
+    func testV9MigrationPreservesV8Rows() throws {
+        let q = try DatabaseQueue()
+        try Database.migrator.migrate(q, upTo: "v8-key-limits")
+        try q.write { db in
+            try db.execute(sql: """
+                INSERT INTO key_totals (vendor, account_id, api_key_id, total_usd, today_usd, mtd_usd,
+                                        limit_usd, limit_remaining_usd, limit_reset, disabled, fetched_at)
+                VALUES ('openrouter','o','erik',18.58,20.05,38.63,20,0,'weekly',0,'2026-07-25T00:00:00Z')
+                """)
+        }
+        try Database.migrator.migrate(q)
+        let keys = try UsageStore(db: q).vendorSummaries(today: "2026-07-25", monthPrefix: "2026-07",
+                                                         last30Start: "2026-06-26")[0].topKeys
+        XCTAssertEqual(keys[0].apiKeyID, "erik")
+        XCTAssertNil(keys[0].lifetimeUSD)
+        XCTAssertEqual(keys[0].limitUSD ?? -1, 20, accuracy: 0.001)
+    }
+
     /// last30USD must be live-corrected the same way today/MTD are: a window sum
     /// over [last30Start, today) that EXCLUDES today's rows, plus the same `t`
     /// (max(activityToday, liveDelta)) added back in — so today's spend is never
