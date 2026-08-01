@@ -124,16 +124,20 @@ final class AnthropicProviderTests: XCTestCase {
           {"starting_at":"2026-06-17T00:00:00Z","ending_at":"2026-06-18T00:00:00Z","results":[
             {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]},
           {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
-            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]},
-          {"starting_at":"2026-07-20T00:00:00Z","ending_at":"2026-07-21T00:00:00Z","results":[
             {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]}
         ],"has_more":false,"next_page":null}
         """#
         let usage30 = #"""
         {"data":[
           {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
-            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]},
-          {"starting_at":"2026-07-20T00:00:00Z","ending_at":"2026-07-21T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]}
+        ],"has_more":false,"next_page":null}
+        """#
+        // Today (07-20) is only served hourly since the server's 1d clamp;
+        // same stub answers the hourly query of both the 35d and 30d windows.
+        let usageTodayHourly = #"""
+        {"data":[
+          {"starting_at":"2026-07-20T11:00:00Z","ending_at":"2026-07-20T12:00:00Z","results":[
             {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}]}
         ],"has_more":false,"next_page":null}
         """#
@@ -154,6 +158,7 @@ final class AnthropicProviderTests: XCTestCase {
         let http = FakeHTTP()
         http.responses["usage_report/messages?starting_at=2026-06-15"] = (usage35, 200)
         http.responses["usage_report/messages?starting_at=2026-06-20"] = (usage30, 200)
+        http.responses["usage_report/messages?starting_at=2026-07-20"] = (usageTodayHourly, 200)
         http.responses["cost_report?starting_at=2026-06-15"] = (cost35, 200)
         http.responses["cost_report?starting_at=2026-06-20"] = (cost30, 200)
         http.responses["api_keys"] = (keysListJSON, 200)
@@ -358,6 +363,47 @@ final class AnthropicProviderTests: XCTestCase {
         let prod = totals.first { $0.apiKeyID == "prod" }
         XCTAssertEqual(prod?.totalUSD ?? -1, 10.0, accuracy: 0.01)
         XCTAssertEqual(prod?.todayUSD ?? -1, 0.0, accuracy: 0.01)
+    }
+
+    // MARK: current-day clamping (server change observed 2026-08-01)
+
+    // The Admin API no longer returns the current incomplete UTC day at
+    // bucket_width=1d — daily queries end at today 00:00 even when ending_at
+    // is later. Today's usage is only visible via 1h buckets, so the provider
+    // must fetch [today, tomorrow) hourly and fold the hours into the day.
+    func testTodayWeightsComeFromHourlyBucketsWhenDailyOmitsToday() async throws {
+        // now = julyTwentiethNoon → 35d window starts 2026-06-15, today = 07-20.
+        let clampedDailyUsage = #"""
+        {"data":[
+          {"starting_at":"2026-07-18T00:00:00Z","ending_at":"2026-07-19T00:00:00Z","results":[
+            {"api_key_id":"apikey_A","model":"claude-opus-4-8","uncached_input_tokens":1000}
+          ]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let hourlyTodayUsage = #"""
+        {"data":[
+          {"starting_at":"2026-07-20T09:00:00Z","ending_at":"2026-07-20T10:00:00Z","results":[
+            {"api_key_id":"apikey_NEW","model":"claude-opus-4-8","uncached_input_tokens":500}
+          ]},
+          {"starting_at":"2026-07-20T13:00:00Z","ending_at":"2026-07-20T14:00:00Z","results":[
+            {"api_key_id":"apikey_NEW","model":"claude-opus-4-8","uncached_input_tokens":1500}
+          ]}
+        ],"has_more":false,"next_page":null}
+        """#
+        let http = FakeHTTP()
+        http.responses["messages?starting_at=2026-06-15"] = (clampedDailyUsage, 200)
+        http.responses["messages?starting_at=2026-07-20"] = (hourlyTodayUsage, 200)
+        http.responses["cost_report"] = (lagCostJSON, 200)   // $10 / 1000 weight on 07-18 → rate 0.01
+        http.responses["api_keys"] = (#"{"data":[{"id":"apikey_A","name":"prod"},{"id":"apikey_NEW","name":"openworker"}],"has_more":false,"last_id":"apikey_NEW"}"#, 200)
+        let provider = makeProvider(http)
+        // Header estimate: 500+1500 hourly weight × 0.01 implied rate.
+        let records = try await provider.fetchUsage(sinceDaysAgo: SyncEngine.usageWindowDays, now: julyTwentiethNoon)
+        XCTAssertEqual(records.first { $0.model == AnthropicProvider.estimatedModel && $0.day == "2026-07-20" }?
+            .costUSD ?? -1, 20.0, accuracy: 0.001, "hourly buckets must fold into today's day weight")
+        // Per-key attribution sees the same hourly weights.
+        let totals = try await provider.fetchKeyTotals(now: julyTwentiethNoon)
+        XCTAssertEqual(totals.first { $0.apiKeyID == "openworker" }?.todayUSD ?? -1, 20.0, accuracy: 0.01)
+        XCTAssertEqual(totals.first { $0.apiKeyID == "prod" }?.todayUSD ?? -1, 0.0, accuracy: 0.01)
     }
 
     /// cost_report paginates via has_more/next_page; all pages must be merged.

@@ -149,7 +149,8 @@ public struct AnthropicProvider: VendorProvider {
         let endDay = Day.utcToday(now: now.addingTimeInterval(86400))
 
         // 1) weighted tokens per (day, normalized model, api_key_id)
-        let weights = try await fetchWeights(startDay: startDay, endDay: endDay)
+        let weights = try await fetchWeights(startDay: startDay, endDay: endDay,
+                                             today: Day.utcToday(now: now))
         // 2) real dollars per (day, normalized model)
         var costByDayModel: [String: [String: Double]] = [:]
         for r in try await fetchUsage(sinceDaysAgo: days, now: now) {
@@ -198,27 +199,54 @@ public struct AnthropicProvider: VendorProvider {
     /// Weighted tokens per (day, normalized model, api_key_id) from the
     /// near-real-time usage report. Shared by per-key attribution and the
     /// same-day cost estimation.
-    private func fetchWeights(startDay: String, endDay: String) async throws
+    ///
+    /// The Admin API stopped returning the current incomplete UTC day at
+    /// bucket_width=1d (observed 2026-08-01: daily buckets stop at today
+    /// 00:00 no matter the ending_at, and cost_report rejects the degenerate
+    /// clamped range outright) — today's usage only exists at 1h granularity.
+    /// So: [startDay, today) daily, plus [today, endDay) hourly with the hours
+    /// folded into their day. Buckets are range-guarded client-side so today
+    /// can never be double-counted even if the server brings partial daily
+    /// buckets back.
+    private func fetchWeights(startDay: String, endDay: String, today: String) async throws
     -> [String: [String: [String: Double]]] {
         var weights: [String: [String: [String: Double]]] = [:]   // day → model → key → weight
+        if startDay < today {
+            try await mergeUsagePages(into: &weights, startingAt: "\(startDay)T00:00:00Z",
+                                      endingAt: "\(min(today, endDay))T00:00:00Z",
+                                      bucketWidth: "1d", limit: 31) { $0 < today }
+        }
+        if today < endDay {
+            try await mergeUsagePages(into: &weights, startingAt: "\(max(today, startDay))T00:00:00Z",
+                                      endingAt: "\(endDay)T00:00:00Z",
+                                      bucketWidth: "1h", limit: 24) { $0 >= today }
+        }
+        return weights
+    }
+
+    private func mergeUsagePages(into weights: inout [String: [String: [String: Double]]],
+                                 startingAt: String, endingAt: String,
+                                 bucketWidth: String, limit: Int,
+                                 dayInRange: (String) -> Bool) async throws {
         var page: String? = nil
         var hops = 0
         repeat {
             var comps = URLComponents(url: baseURL.appendingPathComponent("v1/organizations/usage_report/messages"),
                                       resolvingAgainstBaseURL: false)!
             var items = [
-                URLQueryItem(name: "starting_at", value: "\(startDay)T00:00:00Z"),
-                URLQueryItem(name: "ending_at", value: "\(endDay)T00:00:00Z"),
-                URLQueryItem(name: "bucket_width", value: "1d"),
+                URLQueryItem(name: "starting_at", value: startingAt),
+                URLQueryItem(name: "ending_at", value: endingAt),
+                URLQueryItem(name: "bucket_width", value: bucketWidth),
                 URLQueryItem(name: "group_by[]", value: "api_key_id"),
                 URLQueryItem(name: "group_by[]", value: "model"),
-                URLQueryItem(name: "limit", value: "31"),
+                URLQueryItem(name: "limit", value: String(limit)),
             ]
             if let page { items.append(URLQueryItem(name: "page", value: page)) }
             comps.queryItems = items
             let resp = try await getJSON(comps.url!, as: UsageResp.self)
             for bucket in resp.data {
                 let day = String(bucket.starting_at.prefix(10))
+                guard dayInRange(day) else { continue }
                 for row in bucket.results ?? [] {
                     let w = weight(row)
                     guard w > 0 else { continue }
@@ -230,7 +258,6 @@ public struct AnthropicProvider: VendorProvider {
             page = (resp.has_more == true) ? resp.next_page : nil
             hops += 1
         } while page != nil && hops < 10
-        return weights
     }
 
     private func fetchKeyNames() async throws -> [String: String] {
@@ -326,7 +353,8 @@ public struct AnthropicProvider: VendorProvider {
         // the sentinel rows must still be emitted (as zeros) so an estimate
         // stored by an earlier sync can never linger beside newly-landed real
         // cost and double-count (Codex review 2026-07-24, finding 1).
-        let weights = (try? await fetchWeights(startDay: startDay, endDay: endDay)) ?? [:]
+        let weights = (try? await fetchWeights(startDay: startDay, endDay: endDay,
+                                               today: Day.utcToday(now: now))) ?? [:]
 
         var costByDayModel: [String: [String: Double]] = [:]
         for r in records {
