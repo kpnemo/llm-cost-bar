@@ -6,6 +6,15 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.26] - 2026-08-02
+
+### Fixed
+- OpenRouter: spend that belongs to no listed API key (playground/chatroom
+  usage, deleted keys, OAuth-connected apps) now shows as its own
+  "(unattributed)" row instead of silently making the per-key TODAY/MTD/30d
+  columns sum to less than the vendor header. Applies to all vendors; the
+  row hides itself when everything is attributed.
+
 ## [1.3.25] - 2026-08-02
 
 ### Fixed
