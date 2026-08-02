@@ -196,6 +196,32 @@ public struct AnthropicProvider: VendorProvider {
         return KeyTotal.aggregate(perKeyDay: perKeyDay, names: names, now: now)
     }
 
+    typealias Weights = [String: [String: [String: Double]]]      // day → model → key → weight
+
+    /// One sync cycle needs the identical weights three times (fetchUsage's
+    /// estimation, fetchKeyTotals' attribution, and fetchKeyTotals' inner
+    /// fetchUsage). Uncached that is 6 usage_report calls every poll — enough
+    /// to trip the Admin API org rate limit (observed 2026-08-02). The provider
+    /// lives for one cycle, so a single keyed entry is all the cache needs;
+    /// failures are never cached, so withRetry still re-fetches.
+    private actor WeightsCache {
+        private var key: String?
+        private var value: Weights?
+        func weights(key: String, compute: @Sendable () async throws -> Weights) async throws -> Weights {
+            if key == self.key, let value { return value }
+            let fresh = try await compute()
+            self.key = key; value = fresh
+            return fresh
+        }
+    }
+    private let weightsCache = WeightsCache()
+
+    private func fetchWeights(startDay: String, endDay: String, today: String) async throws -> Weights {
+        try await weightsCache.weights(key: "\(startDay)|\(endDay)|\(today)") {
+            try await self.fetchWeightsRemote(startDay: startDay, endDay: endDay, today: today)
+        }
+    }
+
     /// Weighted tokens per (day, normalized model, api_key_id) from the
     /// near-real-time usage report. Shared by per-key attribution and the
     /// same-day cost estimation.
@@ -208,9 +234,9 @@ public struct AnthropicProvider: VendorProvider {
     /// folded into their day. Buckets are range-guarded client-side so today
     /// can never be double-counted even if the server brings partial daily
     /// buckets back.
-    private func fetchWeights(startDay: String, endDay: String, today: String) async throws
-    -> [String: [String: [String: Double]]] {
-        var weights: [String: [String: [String: Double]]] = [:]   // day → model → key → weight
+    private func fetchWeightsRemote(startDay: String, endDay: String, today: String) async throws
+    -> Weights {
+        var weights: Weights = [:]
         if startDay < today {
             try await mergeUsagePages(into: &weights, startingAt: "\(startDay)T00:00:00Z",
                                       endingAt: "\(min(today, endDay))T00:00:00Z",
@@ -224,7 +250,7 @@ public struct AnthropicProvider: VendorProvider {
         return weights
     }
 
-    private func mergeUsagePages(into weights: inout [String: [String: [String: Double]]],
+    private func mergeUsagePages(into weights: inout Weights,
                                  startingAt: String, endingAt: String,
                                  bucketWidth: String, limit: Int,
                                  dayInRange: (String) -> Bool) async throws {
@@ -320,7 +346,7 @@ public struct AnthropicProvider: VendorProvider {
             else { merged[key] = r }
         }
         let real = Array(merged.values)
-        return real + (await estimatedRecords(realCost: real, sinceDaysAgo: sinceDaysAgo, now: now))
+        return real + (try await estimatedRecords(realCost: real, sinceDaysAgo: sinceDaysAgo, now: now))
     }
 
     // MARK: same-day cost estimation
@@ -337,24 +363,28 @@ public struct AnthropicProvider: VendorProvider {
     /// window's implied $/weight rate for that model (overall blended rate
     /// for models with no cost history). Estimates ride the normal pipeline:
     /// one "~estimated" row per day across the whole window, re-emitted
-    /// (possibly as 0) on every sync so the upsert overwrites each one in
-    /// place as real cost data lands — an estimate never outlives the lag it
-    /// papers over, even across daemon downtime or usage_report outages.
-    /// Real cost rows are never touched by any failure in here.
+    /// (possibly as 0) on every successful sync so the upsert overwrites each
+    /// one in place as real cost data lands — an estimate never outlives the
+    /// lag it papers over, even across daemon downtime.
     /// Known conservative limits (accepted in Codex review 2026-07-24):
     /// a partial-day cost row suppresses that (day, model) estimate, briefly
     /// under-counting; refund-heavy days skew the implied rate; an org with
     /// no cost history at all estimates $0.
     private func estimatedRecords(realCost records: [UsageRecord],
-                                  sinceDaysAgo: Int, now: Date) async -> [UsageRecord] {
+                                  sinceDaysAgo: Int, now: Date) async throws -> [UsageRecord] {
         let startDay = Day.utcToday(now: now.addingTimeInterval(-Double(sinceDaysAgo) * 86400))
         let endDay = Day.utcToday(now: now.addingTimeInterval(86400))
-        // On usage_report failure fall back to EMPTY weights, not to skipping:
-        // the sentinel rows must still be emitted (as zeros) so an estimate
-        // stored by an earlier sync can never linger beside newly-landed real
-        // cost and double-count (Codex review 2026-07-24, finding 1).
-        let weights = (try? await fetchWeights(startDay: startDay, endDay: endDay,
-                                               today: Day.utcToday(now: now))) ?? [:]
+        // usage_report failure PROPAGATES (transient → SyncEngine keeps all
+        // rows stale, incl. the last good estimate) instead of the earlier
+        // fall-back to empty weights, which zeroed today's ~estimated row in
+        // place on every swallowed 429 (the 2026-08-02 "today shows $0" bug).
+        // The double-count the fallback guarded against (stale estimate beside
+        // newly-landed real cost — Codex review 2026-07-24, finding 1) cannot
+        // happen this way: failing here fails the whole fetchUsage, so real
+        // rows don't land either, and the first successful sync re-emits every
+        // sentinel, overwriting anything stale.
+        let weights = try await fetchWeights(startDay: startDay, endDay: endDay,
+                                             today: Day.utcToday(now: now))
 
         var costByDayModel: [String: [String: Double]] = [:]
         for r in records {

@@ -24,6 +24,7 @@ final class AnthropicProviderTests: XCTestCase {
 
     func testCostReportNormalizesAndMergesPerModelPerDay() async throws {
         let http = FakeHTTP(); http.responses["cost_report"] = (costJSON, 200)
+        http.responses["usage_report"] = (#"{"data":[],"has_more":false,"next_page":null}"#, 200)
         let records = (try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: Date()))
             .filter { $0.model != AnthropicProvider.estimatedModel }
         // opus/18th merged, haiku/18th, opus/19th, haiku/19th (zero rows kept so
@@ -316,17 +317,22 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(june25?.costUSD, 0, "25-day-old usage-only day is a gap, not lag")
     }
 
-    /// usage_report failure must not block real rows AND must still zero the
-    /// sentinel rows — otherwise an estimate stored by an earlier sync would
-    /// double-count once the real cost lands (Codex review finding).
-    func testUsageReportFailureEmitsZeroedSentinelsAndKeepsRealRows() async throws {
+    /// usage_report failure must propagate as transient so SyncEngine keeps
+    /// yesterday's rows AND yesterday's estimate visible (stale beats false
+    /// $0.00: a swallowed 429 used to zero today's ~estimated row in place —
+    /// the 2026-08-02 "today shows $0" bug). No double-count risk: real rows
+    /// don't land this cycle either, and the first successful sync re-emits
+    /// every sentinel, overwriting anything stale.
+    func testUsageReportFailurePropagatesAsTransient() async throws {
         let http = FakeHTTP()
-        http.responses["cost_report"] = (costJSON, 200)   // no usage_report stub → throws
-        let records = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: julyTwentiethNoon)
-        let estimates = records.filter { $0.model == AnthropicProvider.estimatedModel }
-        XCTAssertEqual(estimates.count, 31)
-        XCTAssertTrue(estimates.allSatisfy { $0.costUSD == 0 })
-        XCTAssertEqual(records.count - estimates.count, 4, "real rows flow untouched")
+        http.responses["cost_report"] = (costJSON, 200)
+        http.responses["usage_report"] = (#"{"type":"error","error":{"type":"rate_limit_error","message":"You exceeded your rate limit."}}"#, 429)
+        do {
+            _ = try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: julyTwentiethNoon)
+            XCTFail("expected transient error, not silently zeroed estimates")
+        } catch let e as ProviderError {
+            XCTAssertEqual(e.errorClass, "transient")
+        }
     }
 
     func testEstimationUsesOverallRateForModelWithNoCostHistory() async throws {
@@ -406,6 +412,23 @@ final class AnthropicProviderTests: XCTestCase {
         XCTAssertEqual(totals.first { $0.apiKeyID == "prod" }?.todayUSD ?? -1, 0.0, accuracy: 0.01)
     }
 
+    /// One sync cycle hits fetchWeights three times (fetchUsage's estimation,
+    /// fetchKeyTotals directly, fetchKeyTotals' inner fetchUsage) with identical
+    /// parameters. Uncached that is 6 usage_report calls per 5-minute cycle —
+    /// enough to trip the Admin API org rate limit (observed 2026-08-02). The
+    /// per-instance cache must collapse them into one 1d + one 1h fetch.
+    func testWeightsFetchedOncePerCycleAcrossUsageAndKeyTotals() async throws {
+        let http = FakeHTTP()
+        http.responses["usage_report"] = (lagUsageJSON, 200)
+        http.responses["cost_report"] = (lagCostJSON, 200)
+        http.responses["api_keys"] = (keysListJSON, 200)
+        let provider = makeProvider(http)
+        _ = try await provider.fetchUsage(sinceDaysAgo: SyncEngine.usageWindowDays, now: julyTwentiethNoon)
+        _ = try await provider.fetchKeyTotals(now: julyTwentiethNoon)
+        let usageReportCalls = http.requestedURLs.filter { $0.contains("usage_report") }.count
+        XCTAssertEqual(usageReportCalls, 2, "1d + 1h fetched once, then served from the cycle cache")
+    }
+
     /// cost_report paginates via has_more/next_page; all pages must be merged.
     func testFetchUsageMergesAcrossPages() async throws {
         let costJSONPage1 = #"""
@@ -425,6 +448,7 @@ final class AnthropicProviderTests: XCTestCase {
         // URL, which also contains the short page-1 key.
         http.responses["cost_report"] = (costJSONPage1, 200)          // 11 chars
         http.responses["&page=page-2"] = (costJSONPage2, 200)         // 12 chars, present only in page-2's URL → wins
+        http.responses["usage_report"] = (#"{"data":[],"has_more":false,"next_page":null}"#, 200)
         let records = (try await makeProvider(http).fetchUsage(sinceDaysAgo: 30, now: Date()))
             .filter { $0.model != AnthropicProvider.estimatedModel }
         XCTAssertEqual(records.count, 1, "same model+day across pages must merge into one row")
