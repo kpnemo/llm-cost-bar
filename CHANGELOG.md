@@ -6,6 +6,17 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.25] - 2026-08-02
+
+### Fixed
+- Anthropic "Today" no longer silently drops to $0.00 next to nonzero
+  per-key rows: an Admin API rate-limit (429) during the near-real-time
+  usage fetch was swallowed and overwrote today's estimated spend with
+  zero. Failures now keep the last good number visible instead.
+- Anthropic polling makes 2 usage-report calls per cycle instead of 6
+  (identical data was fetched three times), which stops tripping the
+  Admin API rate limit in the first place.
+
 ## [1.3.16] - 2026-07-22
 
 ### Fixed
