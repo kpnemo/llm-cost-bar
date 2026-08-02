@@ -42,6 +42,19 @@ final class KeyDetailTests: XCTestCase {
         XCTAssertNil(spend(limit: 20, remaining: 4).detail().trailing)
     }
 
+    /// The synthetic "(unattributed)" residual row is not a key: it must not
+    /// inflate the "N keys" footer counts, and its inspector line explains
+    /// what it is instead of claiming "no limit".
+    func testUnattributedRowExcludedFromSummaryAndExplainsItself() {
+        let residual = KeySpend(accountID: "-", apiKeyID: UsageStore.unattributedKeyID,
+                                totalUSD: 0.48, todayUSD: 0.48, mtdUSD: 0.48)
+        XCTAssertEqual(KeySpend.summaryLine(for: [spend(limit: 5, remaining: 5), residual]),
+                       "1 key · 1 limited")
+        XCTAssertEqual(residual.detail().leading,
+                       "spend with no listed key (deleted key, playground, or OAuth app)")
+        XCTAssertNil(residual.detail().trailing)
+    }
+
     func testSummaryLineCounts() {
         let keys = [
             spend(limit: 20, remaining: 0, reset: "weekly"),
