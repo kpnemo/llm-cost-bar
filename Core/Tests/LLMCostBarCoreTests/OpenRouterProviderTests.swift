@@ -3,7 +3,9 @@ import XCTest
 
 final class FakeHTTP: HTTPClient, @unchecked Sendable {
     var responses: [String: (String, Int)] = [:]   // url substring → (body, status)
+    var requestedURLs: [String] = []               // every GET, for call-count assertions
     func get(_ url: URL, bearer: String) async throws -> (Data, Int) {
+        requestedURLs.append(url.absoluteString)
         // Prefer the most specific (longest) matching key so a paginated URL
         // containing both "group_by=…" and "page=tok2" matches the page stub,
         // not the page-1 stub which is also a substring of the page-2 URL.
