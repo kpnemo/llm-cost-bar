@@ -81,6 +81,11 @@ public final class UsageStore: Sendable {
     let db: any DatabaseWriter   // internal: UsageStore+Subscriptions.swift shares it
     public init(db: any DatabaseWriter) { self.db = db }
 
+    /// Synthetic key row carrying spend the vendor's key list can't attribute
+    /// to any listed key (deleted keys, OpenRouter playground/OAuth traffic).
+    /// Parentheses keep it from colliding with a real key name.
+    public static let unattributedKeyID = "(unattributed)"
+
     // MARK: writes (daemon + pairing)
 
     public func upsertUsage(_ records: [UsageRecord]) throws {
@@ -307,9 +312,33 @@ public final class UsageStore: Sendable {
                                     limitReset: $0["limit_reset"], disabled: $0["disabled"],
                                     lifetimeUSD: $0["lifetime_usd"]) }
                 let hasKeyMetadata = keys.contains { $0.limitUSD != nil || $0.lifetimeUSD != nil || $0.disabled }
+                var displayKeys = keys
+                // Spend the key list can't attribute to any listed key (deleted
+                // keys, OpenRouter playground/OAuth traffic — live-observed
+                // 2026-08-02: header $2.53 vs key sum $2.05) gets a synthetic
+                // trailing row so the columns sum to the header. Residuals are
+                // measured against ALL stored keys, not the displayed top 5, so
+                // list truncation is never mislabeled as unattributed; windows
+                // no key reports (all-nil today/mtd) stay nil rather than
+                // claiming the whole header is unattributed.
+                let keyAgg = try Row.fetchOne(db, sql: """
+                    SELECT COUNT(*) AS n, COUNT(today_usd) AS nToday, COUNT(mtd_usd) AS nMTD,
+                           COALESCE(SUM(today_usd),0) AS sToday, COALESCE(SUM(mtd_usd),0) AS sMTD,
+                           COALESCE(SUM(total_usd),0) AS sTotal
+                    FROM key_totals WHERE vendor = ?
+                    """, arguments: [vendor])
+                if let keyAgg, keyAgg["n"] as Int > 0 {
+                    let residToday: Double? = (keyAgg["nToday"] as Int) > 0 ? max(0, t - keyAgg["sToday"]) : nil
+                    let residMTD: Double? = (keyAgg["nMTD"] as Int) > 0 ? max(0, m - keyAgg["sMTD"]) : nil
+                    let resid30 = max(0, last30 - keyAgg["sTotal"])
+                    if max(residToday ?? 0, residMTD ?? 0, resid30) > 0.01 {
+                        displayKeys.append(KeySpend(accountID: "-", apiKeyID: Self.unattributedKeyID,
+                                                    totalUSD: resid30, todayUSD: residToday, mtdUSD: residMTD))
+                    }
+                }
                 return VendorSummary(vendor: vendor, todayUSD: t, monthUSD: m, last30USD: last30,
                                      balanceUSD: bal, creditsTotalUSD: credTotal, creditsUsedUSD: credUsed,
-                                     topKeys: keys, hasKeyMetadata: hasKeyMetadata)
+                                     topKeys: displayKeys, hasKeyMetadata: hasKeyMetadata)
             }
         }
     }

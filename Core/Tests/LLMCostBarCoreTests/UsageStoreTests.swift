@@ -72,6 +72,58 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(v.topKeys.first?.totalUSD ?? 0, 120.5, accuracy: 0.001)
     }
 
+    /// Live-observed 2026-08-02: the OpenRouter account spent $0.48 today via
+    /// something /keys can't list (playground chat, a deleted key, an OAuth
+    /// app), so the vendor header ($2.53) exceeded the per-key TODAY sum
+    /// ($2.05) with no row explaining the difference. The residual gets its
+    /// own synthetic row so the key columns always sum to the vendor header
+    /// (cross-column invariant).
+    func testUnattributedResidualRowMakesKeyColumnsSumToHeader() throws {
+        let store = UsageStore(db: try makeDB())
+        try store.addAccount(id: "o", vendor: "openrouter", displayName: "or")
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "o",
+                                      day: "2026-08-02", totalUsageUSD: 101.88)
+        try store.upsertBalance(vendor: "openrouter", accountID: "o",
+                                balance: Balance(balanceUSD: 15.59, totalCreditsUSD: 120, totalUsageUSD: 104.41))
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
+            KeyTotal(apiKeyID: "erik", totalUSD: 2.05, todayUSD: 2.05, mtdUSD: 2.05),
+        ])
+        let v = try store.vendorSummaries(today: "2026-08-02", monthPrefix: "2026-08",
+                                          last30Start: "2026-07-04")[0]
+        XCTAssertEqual(v.todayUSD, 2.53, accuracy: 0.001)
+        let residual = v.topKeys.first { $0.apiKeyID == UsageStore.unattributedKeyID }
+        XCTAssertEqual(residual?.todayUSD ?? -1, 0.48, accuracy: 0.001)
+        XCTAssertEqual(residual?.mtdUSD ?? -1, 0.48, accuracy: 0.001)
+        XCTAssertEqual(residual?.totalUSD ?? -1, 0.48, accuracy: 0.001)
+        XCTAssertEqual(v.topKeys.last?.apiKeyID, UsageStore.unattributedKeyID, "residual sorts last")
+        XCTAssertEqual(v.topKeys.compactMap(\.todayUSD).reduce(0, +), v.todayUSD, accuracy: 0.001)
+        XCTAssertEqual(v.topKeys.compactMap(\.mtdUSD).reduce(0, +), v.monthUSD, accuracy: 0.001)
+        XCTAssertEqual(v.topKeys.map(\.totalUSD).reduce(0, +), v.last30USD, accuracy: 0.001)
+    }
+
+    /// When the listed keys fully cover the header there must be NO residual
+    /// row — and a vendor with no key rows at all gets none either (the whole
+    /// header would just be duplicated as "unattributed").
+    func testNoResidualRowWhenKeysCoverHeaderOrNoKeysExist() throws {
+        let store = UsageStore(db: try makeDB())
+        try store.addAccount(id: "o", vendor: "openrouter", displayName: "or")
+        try store.recordDailyBaseline(vendor: "openrouter", accountID: "o",
+                                      day: "2026-08-02", totalUsageUSD: 100.0)
+        try store.upsertBalance(vendor: "openrouter", accountID: "o",
+                                balance: Balance(balanceUSD: 10, totalCreditsUSD: 120, totalUsageUSD: 102.53))
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [
+            KeyTotal(apiKeyID: "erik", totalUSD: 2.53, todayUSD: 2.53, mtdUSD: 2.53),
+        ])
+        let covered = try store.vendorSummaries(today: "2026-08-02", monthPrefix: "2026-08",
+                                                last30Start: "2026-07-04")[0]
+        XCTAssertFalse(covered.topKeys.contains { $0.apiKeyID == UsageStore.unattributedKeyID })
+
+        try store.upsertKeyTotals(vendor: "openrouter", accountID: "o", totals: [])
+        let keyless = try store.vendorSummaries(today: "2026-08-02", monthPrefix: "2026-08",
+                                                last30Start: "2026-07-04")[0]
+        XCTAssertTrue(keyless.topKeys.isEmpty)
+    }
+
     func testLiveTodayDeltaOverridesLaggingActivity() throws {
         let store = UsageStore(db: try makeDB())
         try store.addAccount(id: "acc1", vendor: "openrouter", displayName: "personal")

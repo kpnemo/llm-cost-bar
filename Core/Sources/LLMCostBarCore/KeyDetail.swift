@@ -12,6 +12,10 @@ extension KeySpend {
     private static func usd(_ v: Double) -> String { String(format: "$%.2f", v) }
 
     public func detail() -> KeyDetail {
+        if apiKeyID == UsageStore.unattributedKeyID {
+            return KeyDetail(leading: "spend with no listed key (deleted key, playground, or OAuth app)",
+                             trailing: nil)
+        }
         var segments: [String] = []
         if disabled { segments.append("disabled") }
         if let limit = limitUSD {
@@ -31,6 +35,7 @@ extension KeySpend {
     /// "4 keys · 3 limited · 1 unlimited · 1 disabled" (zero segments omitted;
     /// "limited" = has a budget limit, regardless of how much is used).
     public static func summaryLine(for keys: [KeySpend]) -> String {
+        let keys = keys.filter { $0.apiKeyID != UsageStore.unattributedKeyID }   // synthetic row is not a key
         let limited = keys.filter { $0.limitUSD != nil }.count
         let unlimited = keys.count - limited
         let disabled = keys.filter(\.disabled).count
