@@ -7,3 +7,4 @@ DerivedData/
 Core/.build/
 .firecrawl/
 build/
+.serena/
