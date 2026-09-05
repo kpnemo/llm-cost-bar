@@ -3,18 +3,23 @@ import Charts
 import LLMCostBarCore
 
 struct DropdownView: View {
-    @EnvironmentObject var model: StoreModel
+    @Environment(StoreModel.self) var model
     @EnvironmentObject var pairing: PairingController
     @EnvironmentObject var updater: UpdaterModel
     @Environment(\.openSettings) private var openSettings
-    @State private var tab: PopoverTab = .apiSpend
+    @State private var tab: PopoverTab
+    init(defaultTab: PopoverTab) { _tab = State(initialValue: defaultTab) }
     @State private var liveRefresh: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            header
+            DashboardHeader(tab: tab)
 
-            Picker("Tab", selection: $tab) {
+            Picker("Tab", selection: Binding(get: { tab }, set: { value in
+                guard tab != value else { return }
+                PerformanceMonitor.shared.begin("tab_" + value.rawValue)
+                tab = value
+            })) {
                 Text("API Spend").tag(PopoverTab.apiSpend)
                 Text("Subscriptions").tag(PopoverTab.subscriptions)
             }
@@ -37,17 +42,18 @@ struct DropdownView: View {
                 Text("v\(updater.currentVersion)")
                     .font(.caption).foregroundStyle(.tertiary)
                     .help("LLM Cost Bar version")
-                syncStatus
+                SyncStatusView()
             }
             .font(.body)
         }
         .padding(16)
         .frame(width: 440)
+        .background(PerformanceProbe(surface: "popup", revision: tab.rawValue))
         .onAppear {
+            PerformanceMonitor.shared.popupAppeared()
             (NSApp.delegate as? AppDelegate)?.pairing = pairing
             model.refresh()
-            // Every popover open starts on the configured default tab (refresh()
-            // just reloaded config, so a settings change applies immediately).
+            // Cached config is already current; do not wait for a database load.
             tab = model.config.defaultTab
             // While the popover is open, refresh every 5 s so the footer status
             // ("syncing…" → "N min ago") and amounts update live instead of
@@ -55,18 +61,55 @@ struct DropdownView: View {
             liveRefresh?.cancel()
             liveRefresh = Task {
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(5))
+                    do { try await Task.sleep(for: .seconds(5)) }
+                    catch { return }
                     model.refresh()
                 }
             }
         }
         .onDisappear {
+            PerformanceMonitor.shared.popupClosed()
             liveRefresh?.cancel()
             liveRefresh = nil
         }
     }
 
-    @ViewBuilder private var header: some View {
+    @ViewBuilder private var apiSpendContent: some View {
+        // Expand/collapse persists in config (collapsed by default): only
+        // vendors in expandedVendors render open, across popover opens and
+        // app relaunches.
+        ForEach(model.vendors, id: \.vendor) { v in
+            VendorCard(vendor: v,
+                       account: model.accounts.first { $0.vendor == v.vendor },
+                       series: model.series[v.vendor] ?? [],
+                       chart: model.charts[v.vendor],
+                       isCollapsed: !model.config.expandedVendors.contains(v.vendor),
+                       toggle: {
+                           if let i = model.config.expandedVendors.firstIndex(of: v.vendor) {
+                               model.config.expandedVendors.remove(at: i)
+                           } else {
+                               model.config.expandedVendors.append(v.vendor)
+                           }
+                           model.saveConfig()
+                       })
+                .equatable()
+        }
+
+        if model.vendors.isEmpty {
+            Text("No accounts connected — open Settings to pair OpenRouter.")
+                .foregroundStyle(.secondary).font(.body)
+        }
+    }
+
+}
+
+private struct DashboardHeader: View {
+    @Environment(StoreModel.self) var model
+    let tab: PopoverTab
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { _ in content }
+    }
+    @ViewBuilder private var content: some View {
         if tab == .apiSpend {
             HStack {
                 Text("Today \(usd(model.summary.todayUSD))")
@@ -97,36 +140,15 @@ struct DropdownView: View {
             .min()
     }
 
-    @ViewBuilder private var apiSpendContent: some View {
-        // Expand/collapse persists in config (collapsed by default): only
-        // vendors in expandedVendors render open, across popover opens and
-        // app relaunches.
-        ForEach(model.vendors, id: \.vendor) { v in
-            VendorCard(vendor: v,
-                       account: model.accounts.first { $0.vendor == v.vendor },
-                       series: model.series[v.vendor] ?? [],
-                       isCollapsed: !model.config.expandedVendors.contains(v.vendor),
-                       toggle: {
-                           if let i = model.config.expandedVendors.firstIndex(of: v.vendor) {
-                               model.config.expandedVendors.remove(at: i)
-                           } else {
-                               model.config.expandedVendors.append(v.vendor)
-                           }
-                           model.saveConfig()
-                       })
-        }
+}
 
-        if model.vendors.isEmpty {
-            Text("No accounts connected — open Settings to pair OpenRouter.")
-                .foregroundStyle(.secondary).font(.body)
-        }
-    }
-
-    @ViewBuilder private var syncStatus: some View {
+private struct SyncStatusView: View {
+    @Environment(StoreModel.self) var model
+    @ViewBuilder var body: some View {
         if !model.daemonHealthy {
             // Grace window: right after launch/self-update the daemon is still
             // booting and hasn't heartbeat yet — "paused" would be a false alarm.
-            if Date().timeIntervalSince(model.launchedAt) < 120 {
+            if model.statusDate.timeIntervalSince(model.launchedAt) < 120 {
                 Label("syncing…", systemImage: "arrow.triangle.2.circlepath")
                     .foregroundStyle(.secondary)
             } else {
@@ -134,8 +156,8 @@ struct DropdownView: View {
                     .foregroundStyle(.orange)
             }
         } else if let last = model.accounts.compactMap(\.lastSyncOK).max(),
-                  let date = ISO8601DateFormatter().date(from: last) {
-            let mins = Int(Date().timeIntervalSince(date) / 60)
+                  let date = parseISO(last) {
+            let mins = Int(model.statusDate.timeIntervalSince(date) / 60)
             syncButton(text: mins > 120 ? "synced \(mins / 60) h ago" : "\(mins) min ago")
                 .foregroundStyle(mins > 120 ? .orange : .secondary)
         } else {
@@ -216,10 +238,15 @@ struct UpdateRow: View {
     }
 }
 
-struct VendorCard: View {
+struct VendorCard: View, Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.vendor == rhs.vendor && lhs.account == rhs.account && lhs.series == rhs.series &&
+        lhs.chart == rhs.chart && lhs.isCollapsed == rhs.isCollapsed
+    }
     let vendor: VendorSummary
     let account: AccountRow?
     let series: [DayCost]
+    let chart: SpendChart?
     let isCollapsed: Bool
     let toggle: () -> Void
     @State private var hoverDay: String?
@@ -413,31 +440,11 @@ struct VendorCard: View {
     /// axis. Today's bar uses the vendor's live figure when it exceeds the
     /// activity feed (which only publishes completed UTC days) — otherwise the
     /// chart shows an empty slot while the header reports live spend.
-    private var filledSeries: [DayCost] {
-        let byDay = Dictionary(uniqueKeysWithValues: series.map { ($0.day, $0.costUSD) })
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.calendar = Calendar(identifier: .gregorian)
-        fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")
-        return (0..<30).reversed().map { offset in
-            let day = fmt.string(from: Date().addingTimeInterval(-Double(offset) * 86400))
-            let cost = offset == 0 ? max(byDay[day] ?? 0, vendor.todayUSD) : (byDay[day] ?? 0)
-            return DayCost(day: day, costUSD: cost)
-        }
-    }
+    private var filledSeries: [DayCost] { chart?.points ?? [] }
 
-    /// True while today's live figure outruns the attributed activity feed —
-    /// the bar is an estimate until the feed publishes today's rows.
-    private var todayIsLiveEstimate: Bool {
-        let activityToday = series.first { $0.day == Day.utcToday() }?.costUSD ?? 0
-        return vendor.todayUSD > activityToday + 0.005
-    }
-
-    /// Live-estimated today renders dimmer than settled days so the two are
-    /// distinguishable at a glance; hover dimming still applies on top.
     private func barOpacity(_ day: String) -> Double {
         let base: Double = (hoverDay == nil || hoverDay == day) ? 0.7 : 0.3
-        return (day == Day.utcToday() && todayIsLiveEstimate) ? base * 0.55 : base
+        return (day == chart?.today && chart?.todayIsLiveEstimate == true) ? base * 0.55 : base
     }
 
     private func keyRowAXLabel(_ k: KeySpend, hasWindows: Bool) -> String {
@@ -542,16 +549,10 @@ struct VendorCard: View {
 
     /// "2026-07-19" → "Jul 19" for the hover readout.
     private func prettyDay(_ day: String) -> String {
-        let parse = DateFormatter()
-        parse.locale = Locale(identifier: "en_US_POSIX")
-        parse.calendar = Calendar(identifier: .gregorian)
-        parse.dateFormat = "yyyy-MM-dd"; parse.timeZone = TimeZone(identifier: "UTC")
-        guard let date = parse.date(from: day) else { return day }
-        let out = DateFormatter()
-        out.locale = Locale(identifier: "en_US_POSIX")
-        out.timeZone = TimeZone(identifier: "UTC")
-        out.dateFormat = "MMM d"
-        return out.string(from: date)
+        guard let date = parseISO(day + "T00:00:00Z") else { return day }
+        var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        style.timeZone = TimeZone(secondsFromGMT: 0)!
+        return date.formatted(style)
     }
 
     /// Bundled favicon for a vendor (Resources/VendorIcons/<vendor>.png,

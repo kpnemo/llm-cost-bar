@@ -6,6 +6,21 @@ carries its version's section as release notes.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.27] - 2026-09-05
+
+### Improved
+- The menu popup displays cached data immediately while refreshes run in the background.
+- Only changed data updates the interface, reducing unnecessary redraws of cards and charts.
+- Charts reuse prepared data and date formatters; the popup starts directly on the configured tab.
+
+### Fixed
+- Background refreshes cannot overwrite newer settings changes.
+- Failed refreshes preserve the last successful dashboard, and daemon-health indicators continue updating when a heartbeat stops.
+
+### Added
+- Bounded local performance logs for popup/tab interactions, refresh timings, and UI stalls, plus a report showing median and p95 timings.
+- Regression coverage for background refreshes, settings races, cached popup measurements, UTC rollover, and chart values.
+
 ## [1.3.26] - 2026-08-02
 
 ### Fixed

@@ -170,12 +170,19 @@ public enum ProviderError: Error, Equatable, Sendable {
 
 public enum Day {
     /// Today's date as "yyyy-MM-dd" in UTC.
-    public static func utcToday(now: Date = Date()) -> String {
+    // DateFormatter supports concurrent formatting on modern macOS. Configure
+    // this instance once; never mutate shared formatting state after creation.
+    private static let utcFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.calendar = Calendar(identifier: .gregorian)
-        fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")
-        return fmt.string(from: now)
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.timeZone = TimeZone(secondsFromGMT: 0)
+        return fmt
+    }()
+
+    public static func utcToday(now: Date = Date()) -> String {
+        utcFormatter.string(from: now)
     }
     /// "yyyy-MM" prefix of the current UTC month.
     public static func utcMonthPrefix(now: Date = Date()) -> String {

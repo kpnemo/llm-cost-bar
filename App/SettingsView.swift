@@ -4,16 +4,22 @@ import ServiceManagement
 import LLMCostBarCore
 
 struct SettingsView: View {
-    @EnvironmentObject var model: StoreModel
+    @State private var selectedTab = "accounts"
+    @Environment(StoreModel.self) var model
     @EnvironmentObject var pairing: PairingController
 
     var body: some View {
-        TabView {
-            AccountsTab().tabItem { Label("Accounts", systemImage: "person.badge.key") }
-            GeneralTab().tabItem { Label("General", systemImage: "gearshape") }
-            DiagnosticsTab().tabItem { Label("Diagnostics", systemImage: "stethoscope") }
+        TabView(selection: Binding(get: { selectedTab }, set: { value in
+            guard selectedTab != value else { return }
+            PerformanceMonitor.shared.begin("settings_" + value)
+            selectedTab = value
+        })) {
+            AccountsTab().tag("accounts").tabItem { Label("Accounts", systemImage: "person.badge.key") }
+            GeneralTab().tag("general").tabItem { Label("General", systemImage: "gearshape") }
+            DiagnosticsTab().tag("diagnostics").tabItem { Label("Diagnostics", systemImage: "stethoscope") }
         }
         .frame(width: 480, height: 360)
+        .background(PerformanceProbe(surface: "settings", revision: selectedTab))
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.pairing = pairing
             pairing.store = model.store
@@ -24,7 +30,7 @@ struct SettingsView: View {
 }
 
 struct AccountsTab: View {
-    @EnvironmentObject var model: StoreModel
+    @Environment(StoreModel.self) var model
     @EnvironmentObject var pairing: PairingController
     @EnvironmentObject var claudeConnect: ClaudeConnectController
     @EnvironmentObject var claudeCookie: ClaudeCookieController
@@ -299,13 +305,14 @@ struct AccountsTab: View {
 }
 
 struct GeneralTab: View {
-    @EnvironmentObject var model: StoreModel
+    @Environment(StoreModel.self) var model
     @EnvironmentObject var updater: UpdaterModel
     @State private var repairState: RepairState = .idle
 
     enum RepairState: Equatable { case idle, repairing, done, failed }
 
     var body: some View {
+        @Bindable var model = model
         Form {
             Picker("Menu bar shows", selection: $model.config.menuBarDisplay) {
                 Text("Icon only").tag(MenuBarDisplay.iconOnly)
@@ -444,7 +451,7 @@ struct GeneralTab: View {
 }
 
 struct DiagnosticsTab: View {
-    @EnvironmentObject var model: StoreModel
+    @Environment(StoreModel.self) var model
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

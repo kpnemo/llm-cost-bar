@@ -4,7 +4,7 @@ import LLMCostBarCore
 
 /// Subscriptions tab body: one card per enabled auto-detected source.
 struct SubscriptionsSection: View {
-    @EnvironmentObject var model: StoreModel
+    @Environment(StoreModel.self) var model
     @EnvironmentObject var claudeConnect: ClaudeConnectController
 
     var body: some View {
@@ -22,6 +22,7 @@ struct SubscriptionsSection: View {
                              credit: model.subscriptionCredits.first { $0.source == src.source },
                              connectPhase: isClaude ? claudeConnect.phase : nil,
                              onConnect: isClaude ? { claudeConnect.connect() } : nil)
+                .equatable()
         }
         .onAppear {
             claudeConnect.store = model.store
@@ -30,7 +31,11 @@ struct SubscriptionsSection: View {
     }
 }
 
-struct SubscriptionCard: View {
+struct SubscriptionCard: View, Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.source == rhs.source && lhs.windows == rhs.windows && lhs.series == rhs.series &&
+        lhs.threshold == rhs.threshold && lhs.credit == rhs.credit && lhs.connectPhase == rhs.connectPhase
+    }
     let source: SubscriptionSourceRow
     let windows: [SubscriptionWindowRow]
     let series: [SubscriptionPoint]
@@ -40,6 +45,10 @@ struct SubscriptionCard: View {
     var onConnect: (() -> Void)? = nil
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { _ in content }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let icon = VendorCard.vendorIcon(iconVendor) {
@@ -83,7 +92,7 @@ struct SubscriptionCard: View {
             if windows.isEmpty {
                 Text("waiting for first sync…").font(.subheadline).foregroundStyle(.secondary)
             }
-            ForEach(visibleWindows, id: \.self) { w in
+            ForEach(visibleWindows, id: \.windowID) { w in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Text("\(w.label) — \(Int(w.usedPercent))%")
@@ -112,7 +121,7 @@ struct SubscriptionCard: View {
             // young data grows in from the right edge instead of filling the
             // width dishonestly.
             if seriesIsMeaningful {
-                Chart(series, id: \.self) { p in
+                Chart(series, id: \.bucketStart) { p in
                     AreaMark(x: .value("Time", p.bucketStart),
                              y: .value("%", p.usedPercent))
                         .foregroundStyle(.linearGradient(
@@ -284,11 +293,36 @@ struct SubscriptionCard: View {
 
 // MARK: shared date formatting
 
+@MainActor
+private enum DisplayDates {
+    static let plainISO = ISO8601DateFormatter()
+    static let fractionalISO: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    static let parsed: NSCache<NSString, NSDate> = {
+        let cache = NSCache<NSString, NSDate>()
+        cache.countLimit = 256
+        return cache
+    }()
+    static let time = formatter("HH:mm")
+    static let weekdayTime = formatter("EEE HH:mm")
+    private static func formatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = format
+        return formatter
+    }
+}
+
+@MainActor
 func parseISO(_ s: String) -> Date? {
-    let fmt = ISO8601DateFormatter()
-    if let d = fmt.date(from: s) { return d }
-    fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return fmt.date(from: s)
+    if let cached = DisplayDates.parsed.object(forKey: s as NSString) { return cached as Date }
+    guard let date = DisplayDates.plainISO.date(from: s) ?? DisplayDates.fractionalISO.date(from: s) else { return nil }
+    DisplayDates.parsed.setObject(date as NSDate, forKey: s as NSString)
+    return date
 }
 
 /// "2 min ago" / "3 h ago" / "2 d ago"
@@ -311,9 +345,9 @@ func countdown(to date: Date, now: Date = Date()) -> String {
 }
 
 /// "resets Tue 14:00 · in 2d 3h" (local time), or "resets now" once passed.
+@MainActor
 func resetDescription(_ reset: Date, now: Date = Date()) -> String {
     guard reset > now else { return "resets now" }
-    let fmt = DateFormatter()
-    fmt.dateFormat = Calendar.current.isDate(reset, inSameDayAs: now) ? "HH:mm" : "EEE HH:mm"
+    let fmt = Calendar.current.isDate(reset, inSameDayAs: now) ? DisplayDates.time : DisplayDates.weekdayTime
     return "resets \(fmt.string(from: reset)) · in \(countdown(to: reset, now: now))"
 }

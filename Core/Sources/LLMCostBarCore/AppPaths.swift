@@ -4,6 +4,7 @@ import Foundation
 /// the base directory (used by tests; also handy for a second dev instance).
 public struct AppPaths: Sendable {
     public let base: URL
+    public init(base: URL) { self.base = base }
     public var database: URL      { base.appendingPathComponent("db.sqlite") }
     public var config: URL        { base.appendingPathComponent("config.json") }
     public var heartbeat: URL     { base.appendingPathComponent("daemon-heartbeat") }

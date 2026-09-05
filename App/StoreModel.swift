@@ -1,32 +1,44 @@
 import Foundation
 import SwiftUI
 import UserNotifications
+import Observation
 import LLMCostBarCore
 
 @MainActor
-final class StoreModel: ObservableObject {
-    @Published var summary = Summary(todayUSD: 0, monthUSD: 0, last30USD: 0)
-    @Published var vendors: [VendorSummary] = []
-    @Published var accounts: [AccountRow] = []
-    @Published var syncLog: [SyncLogRow] = []
-    @Published var config = AppConfig()
-    @Published var lastHeartbeat: Date?
-    @Published var series: [String: [DayCost]] = [:]
-    @Published var subscriptionSources: [SubscriptionSourceRow] = []
-    @Published var subscriptionWindows: [SubscriptionWindowRow] = []
-    @Published var subscriptionCredits: [SubscriptionCreditRow] = []
-    @Published var subscriptionSeries: [String: [SubscriptionPoint]] = [:]
-    private var notificationAuthRequested = false
+@Observable
+final class StoreModel {
+    var summary = Summary(todayUSD: 0, monthUSD: 0, last30USD: 0)
+    var vendors: [VendorSummary] = []
+    var accounts: [AccountRow] = []
+    var syncLog: [SyncLogRow] = []
+    var config = AppConfig() { didSet { configRevision &+= 1 } }
+    var lastHeartbeat: Date?
+    /// Only time-dependent status views observe this; charts stay untouched.
+    var statusDate = Date()
+    var series: [String: [DayCost]] = [:]
+    var charts: [String: SpendChart] = [:]
+    var subscriptionSources: [SubscriptionSourceRow] = []
+    var subscriptionWindows: [SubscriptionWindowRow] = []
+    var subscriptionCredits: [SubscriptionCreditRow] = []
+    var subscriptionSeries: [String: [SubscriptionPoint]] = [:]
+    @ObservationIgnored private var notificationAuthRequested = false
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshAgain = false
+    @ObservationIgnored private var configRevision: UInt = 0
+    @ObservationIgnored private var configSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var lastSavedConfig: AppConfig?
+    @ObservationIgnored private var worker: DashboardWorker!
 
-    let paths = AppPaths.resolve()
+    let paths: AppPaths
     let store: UsageStore
     /// App start time: right after launch (esp. post-self-update) the daemon
     /// was just re-bootstrapped and its heartbeat is legitimately missing for
     /// a few seconds — that's "starting", not "paused".
     let launchedAt = Date()
-    private var timer: Timer?
+    @ObservationIgnored private var timer: Timer?
 
-    init() {
+    init(store suppliedStore: UsageStore? = nil, paths: AppPaths = .resolve(), startPolling: Bool = true) {
+        self.paths = paths
         // Same open path as daemon; WAL allows concurrent access.
         //
         // Deviation from spec: the spec's `try!` risks a crash-at-launch race —
@@ -41,7 +53,9 @@ final class StoreModel: ObservableObject {
         func openStore(paths: AppPaths) -> UsageStore? {
             (try? Database.open(at: paths.database)).map(UsageStore.init(db:))
         }
-        if let s = openStore(paths: paths) {
+        if let suppliedStore {
+            store = suppliedStore
+        } else if let s = openStore(paths: paths) {
             store = s
         } else {
             Thread.sleep(forTimeInterval: 0.5)
@@ -55,45 +69,78 @@ final class StoreModel: ObservableObject {
         // item. App-only on purpose: the app created those items, so it reads
         // them without consent prompts; the daemon would prompt per item.
         // No-op on fresh installs and after the first successful run.
-        let accountIDs = (try? store.accounts())?.map(\.id) ?? []
-        _ = try? KeychainStore().migrateLegacyKeys(accountIDs: accountIDs)
+        if suppliedStore == nil {
+            let accountIDs = (try? store.accounts())?.map(\.id) ?? []
+            _ = try? KeychainStore().migrateLegacyKeys(accountIDs: accountIDs)
+        }
 
+        config = AppConfig.load(from: paths.config)
+        lastSavedConfig = config
+        worker = DashboardWorker(store: store, paths: paths)
+        guard startPolling else { return }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
 
-    func refresh() {
-        let today = Day.utcToday(), month = Day.utcMonthPrefix()
-        let last30Start = Day.last30Start()
-        summary = (try? store.summary(today: today, monthPrefix: month, last30Start: last30Start)) ?? summary
-        vendors = (try? store.vendorSummaries(today: today, monthPrefix: month, last30Start: last30Start)) ?? vendors
-        accounts = (try? store.accounts()) ?? accounts
-        syncLog = (try? store.recentSyncLog(limit: 50)) ?? syncLog
-        config = AppConfig.load(from: paths.config)
-        let since = Day.utcToday(now: Date().addingTimeInterval(-30 * 86400))
-        series = Dictionary(uniqueKeysWithValues: vendors.map {
-            ($0.vendor, (try? store.dailyCosts(vendor: $0.vendor, sinceDay: since)) ?? [])
-        })
-        lastHeartbeat = (try? FileManager.default.attributesOfItem(atPath: paths.heartbeat.path)[.modificationDate]) as? Date
+    /// Only the returned values are applied on MainActor. Calls while a load is
+    /// in flight coalesce into one follow-up, so a slow disk cannot build a queue.
+    @discardableResult
+    func refresh() -> Task<Void, Never> {
+        if let refreshTask { refreshAgain = true; return refreshTask }
+        refreshTask = Task { [weak self] in
+            guard let self else { return }
+            repeat {
+                refreshAgain = false
+                let revision = configRevision
+                let canReloadConfig = configSaveTask == nil
+                let start = ProcessInfo.processInfo.systemUptime
+                do {
+                    let result = try await worker.load()
+                    let applyStart = ProcessInfo.processInfo.systemUptime
+                    apply(result.snapshot)
+                    if lastHeartbeat != result.heartbeat { lastHeartbeat = result.heartbeat }
+                    // A load started before a settings edit must never undo it.
+                    if canReloadConfig, configSaveTask == nil, revision == configRevision,
+                       config != result.config {
+                        lastSavedConfig = result.config
+                        config = result.config
+                    }
+                    deliverPendingAlerts(result.snapshot.pendingAlerts)
+                    PerformanceLog.shared.duration("refresh", since: start, fields: [
+                        "worker_ms": PerformanceLog.milliseconds(result.loadDuration),
+                        "apply_ms": PerformanceLog.milliseconds(ProcessInfo.processInfo.systemUptime - applyStart)
+                    ])
+                } catch {
+                    // Preserve the complete last-good screen; never flash zeros.
+                    PerformanceLog.shared.record("refresh_failed", fields: ["error_type": String(describing: type(of: error))])
+                }
+                statusDate = Date()
+            } while refreshAgain && !Task.isCancelled
+            refreshTask = nil
+        }
+        return refreshTask!
+    }
 
-        subscriptionSources = (try? store.subscriptionSources()) ?? subscriptionSources
-        subscriptionWindows = (try? store.latestSubscriptionWindows()) ?? subscriptionWindows
-        subscriptionCredits = (try? store.subscriptionCredits()) ?? subscriptionCredits
-        subscriptionSeries = Dictionary(uniqueKeysWithValues: subscriptionSources.map { src in
-            // Sparkline tracks the weekly window: claude seven_day, codex primary.
-            let weekly = src.source == SubscriptionSource.claude ? "seven_day" : "primary"
-            return (src.source, (try? store.subscriptionSeries(source: src.source, windowID: weekly)) ?? [])
-        })
-        deliverPendingAlerts()
+    private func apply(_ next: DashboardSnapshot) {
+        if summary != next.summary { summary = next.summary }
+        if vendors != next.vendors { vendors = next.vendors }
+        if accounts != next.accounts { accounts = next.accounts }
+        if syncLog != next.syncLog { syncLog = next.syncLog }
+        if series != next.series { series = next.series }
+        if charts != next.charts { charts = next.charts }
+        if subscriptionSources != next.subscriptionSources { subscriptionSources = next.subscriptionSources }
+        if subscriptionWindows != next.subscriptionWindows { subscriptionWindows = next.subscriptionWindows }
+        if subscriptionCredits != next.subscriptionCredits { subscriptionCredits = next.subscriptionCredits }
+        if subscriptionSeries != next.subscriptionSeries { subscriptionSeries = next.subscriptionSeries }
     }
 
     /// Daemon detects threshold crossings and writes alert_events; only the app
     /// can post user notifications (llmcostd is a bare tool, no bundle for the
     /// permission dialog). The 30 s refresh doubles as the delivery pump.
-    private func deliverPendingAlerts() {
-        guard let pending = try? store.undeliveredAlertEvents(), !pending.isEmpty else { return }
+    private func deliverPendingAlerts(_ pending: [AlertEventRow]) {
+        guard !pending.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
         if !notificationAuthRequested {
             notificationAuthRequested = true
@@ -104,13 +151,13 @@ final class StoreModel: ObservableObject {
             content.title = "LLM Cost Bar"
             content.body = alert.message
             center.add(UNNotificationRequest(identifier: "alert-\(alert.id)", content: content, trigger: nil))
-            try? store.markAlertDelivered(id: alert.id)
+            Task { try? await worker.markAlertDelivered(id: alert.id) }
         }
     }
 
     var daemonHealthy: Bool {
         guard let hb = lastHeartbeat else { return false }
-        return Date().timeIntervalSince(hb) < 60
+        return statusDate.timeIntervalSince(hb) < 60
     }
 
     /// Three-state daemon status for UI. The update flow deliberately stops
@@ -120,7 +167,7 @@ final class StoreModel: ObservableObject {
     enum DaemonState { case starting, running, notResponding }
     var daemonState: DaemonState {
         if daemonHealthy { return .running }
-        return Date().timeIntervalSince(launchedAt) < 120 ? .starting : .notResponding
+        return statusDate.timeIntervalSince(launchedAt) < 120 ? .starting : .notResponding
     }
 
     var menuBarTitle: String {
@@ -132,12 +179,52 @@ final class StoreModel: ObservableObject {
         }
     }
 
-    func saveConfig() {
-        try? config.save(to: paths.config)
-        refresh()
+    @discardableResult
+    func saveConfig() -> Task<Void, Never>? {
+        guard config != lastSavedConfig else { return nil }
+        let value = config
+        let saveRevision = configRevision
+        lastSavedConfig = value
+        let previous = configSaveTask
+        configSaveTask = Task {
+            await previous?.value
+            do { try await worker.saveConfig(value) }
+            catch {
+                if lastSavedConfig == value { lastSavedConfig = nil }
+                PerformanceLog.shared.record("config_save_failed")
+            }
+            // Only the newest save clears the pending flag.
+            if configRevision == saveRevision { configSaveTask = nil }
+        }
+        return configSaveTask
     }
 
     func requestSync() {
-        try? Data().write(to: paths.syncRequest)
+        Task { try? await worker.requestSync() }
     }
+}
+
+/// Actor isolation keeps synchronous GRDB/file reads on the worker executor.
+/// SwiftUI observes StoreModel properties individually, not this worker's state.
+private actor DashboardWorker {
+    let store: UsageStore
+    let paths: AppPaths
+    init(store: UsageStore, paths: AppPaths) { self.store = store; self.paths = paths }
+    struct Result: Sendable {
+        let snapshot: DashboardSnapshot
+        let config: AppConfig
+        let heartbeat: Date?
+        let loadDuration: TimeInterval
+    }
+    func load() throws -> Result {
+        let start = ProcessInfo.processInfo.systemUptime
+        let snapshot = try DashboardSnapshot.load(from: store)
+        let config = AppConfig.load(from: paths.config)
+        let heartbeat = (try? FileManager.default.attributesOfItem(atPath: paths.heartbeat.path)[.modificationDate]) as? Date
+        return Result(snapshot: snapshot, config: config, heartbeat: heartbeat,
+                      loadDuration: ProcessInfo.processInfo.systemUptime - start)
+    }
+    func saveConfig(_ config: AppConfig) throws { try config.save(to: paths.config) }
+    func requestSync() throws { try Data().write(to: paths.syncRequest) }
+    func markAlertDelivered(id: Int64) throws { try store.markAlertDelivered(id: id) }
 }

@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let paths = AppPaths.resolve()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        PerformanceMonitor.shared.start()
         try? FileManager.default.removeItem(at: paths.cleanQuitMark)   // we're alive
         // Off the main thread: BTM unregister + 3× launchctl block for seconds.
         DispatchQueue.global(qos: .userInitiated).async {
@@ -156,7 +157,7 @@ enum DaemonManager {
 @main
 struct LLMCostBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @StateObject private var model = StoreModel()
+    @State private var model = StoreModel()
     @StateObject private var pairing = PairingController()
     @StateObject private var updater = UpdaterModel()
     @StateObject private var claudeConnect = ClaudeConnectController()
@@ -164,24 +165,20 @@ struct LLMCostBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            DropdownView()
-                .environmentObject(model)
+            DropdownView(defaultTab: model.config.defaultTab)
+                .environment(model)
                 .environmentObject(pairing)
                 .environmentObject(updater)
                 .environmentObject(claudeConnect)
                 .environmentObject(claudeCookie)
         } label: {
-            // Placeholder glyph until icon concepts are chosen (spec open item).
-            HStack(spacing: 3) {
-                Image(systemName: "dollarsign.gauge.chart.lefthalf.righthalf")
-                if !model.menuBarTitle.isEmpty { Text(model.menuBarTitle) }
-            }
+            MenuBarLabel().environment(model)
         }
         .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView()
-                .environmentObject(model)
+                .environment(model)
                 .environmentObject(pairing)
                 .environmentObject(updater)
                 .environmentObject(claudeConnect)
@@ -190,4 +187,16 @@ struct LLMCostBarApp: App {
     }
 
     init() {}
+}
+
+/// Keep amount updates out of App.body, which owns the entire menu scene.
+private struct MenuBarLabel: View {
+    @Environment(StoreModel.self) private var model
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "dollarsign.gauge.chart.lefthalf.righthalf")
+            if !model.menuBarTitle.isEmpty { Text(model.menuBarTitle) }
+        }
+        .background(PerformanceProbe(surface: "status"))
+    }
 }
